@@ -17,10 +17,11 @@
 9. [KIS OpenAPI 연동](#9-kis-openapi-연동)
 10. [환경 설정](#10-환경-설정)
 11. [실행 방법](#11-실행-방법)
-12. [스마트폰 접속 방법](#12-스마트폰-접속-방법)
-13. [KIS API 키 발급 후 전환 방법](#13-kis-api-키-발급-후-전환-방법)
-14. [개발 로드맵](#14-개발-로드맵)
-15. [변경 이력 (Changelog)](#15-변경-이력-changelog)
+12. [서비스 관리 명령어](#12-서비스-관리-명령어)
+13. [스마트폰 접속 방법](#13-스마트폰-접속-방법)
+14. [KIS API 키 발급 후 전환 방법](#14-kis-api-키-발급-후-전환-방법)
+15. [개발 로드맵](#15-개발-로드맵)
+16. [변경 이력 (Changelog)](#16-변경-이력-changelog)
 
 ---
 
@@ -537,9 +538,76 @@ curl http://localhost:8080/api/portfolio/balance
 curl http://localhost:8080/api/orders
 ```
 
+## 12. 서비스 관리 명령어
+
+> 아래 명령어는 모두 **PowerShell** 또는 **CMD**에서 실행합니다.
+
+### 실행 상태 확인
+
+**포트 확인 (가장 빠름)**
+```powershell
+netstat -ano | findstr ":808" | findstr "LISTENING"
+```
+
+| 포트 | 서비스 |
+|------|--------|
+| `:8080` | api-gateway |
+| `:8081` | market-service |
+| `:8082` | order-service |
+| `:8083` | portfolio-service |
+
+4개 포트가 모두 `LISTENING` 상태이면 전체 정상 실행 중.
+
+**Health API 확인**
+```powershell
+curl http://localhost:8080/actuator/health
+curl http://localhost:8081/actuator/health
+curl http://localhost:8082/actuator/health
+curl http://localhost:8083/actuator/health
+```
+각각 `{"status":"UP"}` 응답이 오면 정상.
+
 ---
 
-## 12. 스마트폰 접속 방법
+### Docker 인프라 상태 확인
+
+```powershell
+docker ps
+```
+`axiom-postgres`, `axiom-kafka`, `axiom-zookeeper` 컨테이너가 `Up` 상태여야 Spring Boot 서비스가 정상 동작합니다.
+
+---
+
+### 서비스 종료
+
+**특정 서비스 종료** — 포트 확인 후 PID로 종료
+```powershell
+# 1단계: PID 확인
+netstat -ano | findstr ":808" | findstr "LISTENING"
+
+# 2단계: 해당 PID 종료 (예시)
+taskkill /PID 12345 /F
+
+# 여러 개 한번에 종료
+taskkill /PID 11111 /PID 22222 /PID 33333 /PID 44444 /F
+```
+
+**Java 프로세스 전체 종료** (모든 서비스 한번에)
+```powershell
+taskkill /IM java.exe /F
+```
+> PC에서 실행 중인 **모든** Java 프로세스가 종료됩니다.
+
+**Docker 인프라 종료**
+```powershell
+cd D:\kc\project\axiom
+docker-compose down
+```
+
+---
+
+
+## 13. 스마트폰 접속 방법
 
 ### 방법 1: 같은 WiFi (가장 간단)
 
@@ -564,7 +632,7 @@ curl http://localhost:8080/api/orders
 
 ---
 
-## 13. KIS API 키 발급 후 전환 방법
+## 14. KIS API 키 발급 후 전환 방법
 
 ### 1. KIS OpenAPI 신청
 
@@ -599,7 +667,7 @@ kis:
 
 ---
 
-## 14. 개발 로드맵
+## 15. 개발 로드맵
 
 ### 완료
 - [x] MSA 프로젝트 구조 구성 (4개 Spring Boot 서비스)
@@ -632,11 +700,39 @@ kis:
 
 ---
 
-## 15. 변경 이력 (Changelog)
+## 16. 변경 이력 (Changelog)
 
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
 
 ---
+<details>
+<summary><strong>[v0.1.1] - 2026-03-01</strong> &nbsp;·&nbsp; KIS 모의투자 API 연동 + 주식 시장 운영시간 체크</summary>
+
+<br>
+
+#### Added
+- KIS 한국투자증권 OpenAPI 모의투자(Paper Trading) 연동
+  - `kis.mode: mock | paper | real` 3단계 모드 설정 (`application.yml`)
+  - 실제 자격증명은 `application-secret.yml`에 분리 관리 (gitignore 적용)
+  - Access Token 24시간 캐싱 (`KisTokenService`) — market-service에서 중앙 발급, 나머지 서비스는 위임 조회 (`GET /internal/token`)
+  - market-service: 실시간 현재가 조회 (`GET /uapi/domestic-stock/v1/quotations/inquire-price`)
+  - order-service: 모의투자 매수/매도 주문 (`POST /uapi/domestic-stock/v1/trading/order-cash`, TR ID `VTTC0802U` / `VTTC0801U`)
+  - portfolio-service: 모의투자 잔고 조회 (`GET /uapi/domestic-stock/v1/trading/inquire-balance`, TR ID `VTTC8434R`)
+- 주식 시장 운영시간 체크 (`MarketHoursChecker`)
+  - 매수/매도 주문 시 KST 평일 09:00~15:30 외 즉시 차단 (KIS API 호출 없음)
+  - `mock` 모드일 때는 24시간 주문 가능 (개발/테스트 목적)
+  - 응답에 다음 개장 시각 포함 (`marketOpenAt`)
+
+#### Fixed
+- `OrderController` `/buy`, `/sell` 엔드포인트에서 `orderType` 자동 설정 누락 수정
+- `TradeOrder.stockName` NOT NULL 제약 제거 (ticker로 종목 식별 가능)
+- KIS 주문 응답에서 `rt_cd` 체크 추가 — 오류 시 명확한 메시지 반환
+
+#### Notes
+- 현재 `kis.mode: paper` (모의투자 연동 중)
+- 공휴일 체크는 미포함 — 공휴일에는 KIS가 `MARKET_CLOSED` 오류를 반환하므로 실사용상 문제 없음
+
+</details>
 
 <details>
 <summary><strong>[v0.1.0] - 2026-03-01</strong> &nbsp;·&nbsp; MSA 기반 주식매매 프로그램 초기 구성</summary>
