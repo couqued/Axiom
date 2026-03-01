@@ -1,6 +1,7 @@
-# 주식 자동 매매 프로젝트
+# Auto Trade Project
 
-주식 자동 매매를 위한 MSA 기반 백엔드 + React PWA 프론트엔드 프로젝트.
+
+MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 
 ---
 
