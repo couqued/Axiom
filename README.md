@@ -20,6 +20,7 @@
 12. [스마트폰 접속 방법](#12-스마트폰-접속-방법)
 13. [KIS API 키 발급 후 전환 방법](#13-kis-api-키-발급-후-전환-방법)
 14. [개발 로드맵](#14-개발-로드맵)
+15. [변경 이력 (Changelog)](#15-변경-이력-changelog)
 
 ---
 
@@ -625,3 +626,26 @@ kis:
 - [KIS Developers 공식 문서](https://apiportal.koreainvestment.com)
 - [Spring Cloud Gateway 문서](https://docs.spring.io/spring-cloud-gateway/docs/current/reference/html/)
 - [Tailscale 공식 사이트](https://tailscale.com)
+
+---
+
+## 15. 변경 이력 (Changelog)
+
+> 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
+
+---
+
+<details>
+<summary><strong>[v0.1.0] - 2026-03-01</strong> &nbsp;·&nbsp; MSA 기반 주식매매 프로그램 초기 구성</summary>
+
+<br>
+
+#### Added
+- MSA 4개 서비스 초기 구성 (api-gateway :8080, market-service :8081, order-service :8082, portfolio-service :8083)
+- Docker Compose 인프라 구성 (PostgreSQL 16 + Kafka 7.5 + Zookeeper)
+
+#### Notes
+- 현재 전 서비스 `kis.mock-mode: true` 상태 (KIS API 키 미발급)
+- 실제 연동 시 각 서비스 `application.yml`에서 `mock-mode: false` 및 키 입력 필요
+
+</details>
