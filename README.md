@@ -1,4 +1,4 @@
-# Axiom Automated Stock Trading System
+# Automated Stock Trading System
 
 MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 
