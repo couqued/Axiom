@@ -1,5 +1,4 @@
-# Auto Trade Project
-
+# Stock Auto Trading Project
 
 MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 
@@ -28,7 +27,7 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 
 ## 1. 프로젝트 배경
 
-- **목표**: 한국투자증권(KIS) OpenAPI를 활용한 실제 국내 주식 자동 매수/매도 실행
+- **목표**: 한국투자증권(KIS) OpenAPI를 활용한 실제 국내 주식 자동 트레이딩
 - **구조**: MSA (마이크로서비스 아키텍처)로 서비스 독립성 확보
 - **접속**: PC 브라우저 + 스마트폰 홈화면(PWA) 모두 지원
 - **현재 상태**: KIS API 키 미발급 → mock 모드로 개발/테스트 진행
@@ -64,22 +63,27 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 ┌─────────────────────────────────────────┐
 │          api-gateway (port 8080)        │
 │          Spring Cloud Gateway           │
-└──────┬──────────────┬────────────────┬──┘
-       │              │                │
-       ▼              ▼                ▼
-┌──────────┐  ┌──────────────┐  ┌─────────────────┐
-│  market  │  │    order     │  │    portfolio    │
-│ service  │  │   service    │  │    service      │
-│ :8081    │  │   :8082      │  │    :8083        │
-│          │  │              │  │                 │
-│시세/종목  │  │매수/매도 주문 │  │포트폴리오/잔고  │
-└────┬─────┘  └──────┬───────┘  └────────┬────────┘
-     │               │                   │
-     │        ┌──────▼──────┐            │
-     │        │    Kafka    │◄───────────┘
-     │        │order-events │  (consume)
-     │        └─────────────┘
-     │
+└───┬──────────────┬─────────────┬──────┬─┘
+    │              │             │      │
+    ▼              ▼             ▼      ▼
+┌────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│ market │  │  order   │  │portfolio │  │strategy  │
+│service │  │ service  │  │ service  │  │ service  │
+│ :8081  │  │  :8082   │  │  :8083   │  │  :8084   │
+│        │  │          │  │          │  │          │
+│시세/종목│  │매수/매도  │  │포트폴리오│  │자동매매  │
+│일봉수집 │  │주문      │  │잔고      │  │전략/Slack│
+└───┬────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘
+    │            │             │              │
+    │     ┌──────▼──────┐      │        ┌─────▼──────┐
+    │     │    Kafka    │◄─────┘        │   Slack    │
+    │     │order-events │  (consume)    │  Webhook   │
+    │     └─────────────┘               └────────────┘
+    │◄─────────────────────────────────────────────────┐
+    │  (캔들 데이터 조회 / 매수·매도 주문 위임)          │
+    └────────────────────────────────────────────────►─┘
+                                                strategy-service
+
      ▼  (KIS API 키 발급 후)
 ┌─────────────────────────┐
 │   KIS OpenAPI           │
@@ -87,18 +91,21 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 │       .com:9443         │
 └─────────────────────────┘
 
-┌─────────────────────────┐
-│   PostgreSQL (Docker)   │
-│   port 5432             │
-│   schemas: orders,      │
-│            portfolio    │
-└─────────────────────────┘
+┌──────────────────────────────┐
+│   PostgreSQL (Docker)        │
+│   port 5432                  │
+│   schemas: orders,           │
+│            portfolio,        │
+│            market            │
+└──────────────────────────────┘
 ```
 
 **서비스 간 통신:**
-- `order-service → market-service`: REST (주문 시 현재가 검증, 향후 추가)
 - `order-service → Kafka`: 주문 체결 이벤트 발행
 - `portfolio-service ← Kafka`: 체결 이벤트 소비 → 포트폴리오 자동 갱신
+- `strategy-service → market-service`: REST (일봉 캔들 데이터 조회)
+- `strategy-service → order-service`: REST (자동 매수/매도 주문 위임)
+- `order-service, portfolio-service → market-service`: REST (KIS Access Token 위임 조회 `/internal/token`)
 
 ---
 
@@ -163,6 +170,27 @@ axiom/
 │       ├── kafka/OrderEventConsumer.java  # Kafka 이벤트 소비
 │       └── dto/PortfolioItemDto.java
 │
+├── strategy-service/                  # 자동매매 전략 서비스 (port 8084)
+│   ├── build.gradle
+│   └── src/main/java/com/axiom/strategy/
+│       ├── StrategyApplication.java
+│       ├── config/StrategyConfig.java    # @ConfigurationProperties, WebClient Bean
+│       ├── controller/
+│       │   └── StrategyController.java  # POST /api/strategy/run|test-slack
+│       ├── strategy/
+│       │   ├── TradingStrategy.java     # 전략 인터페이스
+│       │   └── GoldenCrossStrategy.java # MA5/MA20 골든크로스·데드크로스
+│       ├── engine/StrategyEngine.java   # 전략 순회 실행
+│       ├── scheduler/StrategyScheduler.java  # 평일 09:05~15:20 5분 주기
+│       ├── client/
+│       │   ├── MarketClient.java        # market-service 캔들 조회
+│       │   └── OrderClient.java         # order-service 주문 위임
+│       ├── notification/SlackNotifier.java   # Slack Incoming Webhook 알림
+│       └── dto/
+│           ├── CandleDto.java
+│           ├── SignalDto.java           # BUY / SELL / HOLD
+│           └── OrderRequest.java
+│
 └── frontend/                          # React PWA (port 5173)
     ├── index.html                     # PWA 메타태그 포함
     ├── public/
@@ -199,15 +227,18 @@ Spring Cloud Gateway 기반 단일 진입점.
 | `/api/market/**` | market-service:8081 | `/api/market/stocks/...` → `/api/stocks/...` |
 | `/api/orders/**` | order-service:8082 | 경로 유지 |
 | `/api/portfolio/**` | portfolio-service:8083 | 경로 유지 |
+| `/api/strategy/**` | strategy-service:8084 | 경로 유지 |
 
 ---
 
 ### market-service (port 8081)
 
-종목 검색과 실시간 시세 조회 담당.
+종목 검색, 실시간 시세 조회, 일봉(OHLCV) 데이터 수집 담당.
 
 - **mock 모드**: 삼성전자, SK하이닉스 등 14개 주요 종목 랜덤 시세 반환
 - **실제 모드**: KIS API `inquire-price` 호출 (API 키 필요)
+- **일봉 수집**: 매일 15:40 KIS `inquire-daily-itemchartprice` 호출 → `market.daily_candles` 저장
+- **토큰 중앙화**: KIS Access Token을 market-service에서 단독 발급 → `GET /internal/token`으로 타 서비스에 제공
 
 ---
 
@@ -240,6 +271,31 @@ OrderController.buy/sell()
 **매도 처리:**
 - 부분 매도: 수량 차감, 총 투자금 차감
 - 전량 매도: 해당 종목 레코드 삭제
+
+---
+
+### strategy-service (port 8084)
+
+자동매매 전략 실행 및 Slack 알림 담당.
+
+- **전략 엔진**: `TradingStrategy` 인터페이스 기반, Spring이 구현체를 자동 등록
+- **골든크로스 전략**: MA5 / MA20 이동평균 비교
+  - 전일 MA5 ≤ MA20, 당일 MA5 > MA20 → **매수(BUY)**
+  - 전일 MA5 ≥ MA20, 당일 MA5 < MA20 → **매도(SELL)**
+- **스케줄러**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행
+- **Slack 알림**: 매매 신호 발생 시 + 주문 체결 결과 알림
+- **수동 트리거**: `POST /api/strategy/run` — 즉시 실행 (테스트용)
+
+**자동매매 흐름:**
+```
+StrategyScheduler (5분 주기)
+  → StrategyEngine.run()
+    → MarketClient → market-service (일봉 캔들 조회)
+    → GoldenCrossStrategy.evaluate() → BUY / SELL / HOLD
+    → SlackNotifier.sendSignal() (신호 알림)
+    → OrderClient → order-service (BUY/SELL 시 주문)
+    → SlackNotifier.sendOrderFilled() (체결 결과 알림)
+```
 
 ---
 
@@ -285,6 +341,21 @@ PostgreSQL 단일 인스턴스, 스키마 분리 방식.
 | avg_price | NUMERIC(15,2) | 평균 매수 단가 |
 | total_invest | NUMERIC(15,2) | 총 투자금액 |
 | updated_at | TIMESTAMP | 최종 갱신 시각 |
+
+### daily_candles (market 스키마)
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | BIGSERIAL PK | 자동 증가 |
+| ticker | VARCHAR(10) | 종목코드 |
+| trade_date | DATE | 거래일 |
+| open_price | NUMERIC(15,2) | 시가 |
+| high_price | NUMERIC(15,2) | 고가 |
+| low_price | NUMERIC(15,2) | 저가 |
+| close_price | NUMERIC(15,2) | 종가 |
+| volume | BIGINT | 거래량 |
+
+> UNIQUE 제약: `(ticker, trade_date)` — 동일 날짜 중복 저장 방지
 
 ---
 
@@ -361,6 +432,22 @@ PostgreSQL 단일 인스턴스, 스키마 분리 방식.
 | GET | `/api/portfolio` | 보유 주식 현황 |
 | GET | `/api/portfolio/balance` | 계좌 잔고 |
 
+### Strategy Service
+
+| Method | URL | 설명 |
+|--------|-----|------|
+| POST | `/api/strategy/run` | 전략 즉시 실행 (수동 트리거) |
+| POST | `/api/strategy/test-slack` | Slack 알림 연결 테스트 |
+
+> strategy-service는 스케줄러(평일 09:05~15:20, 5분 주기)로 자동 실행됩니다.
+> `/api/strategy/run`은 장 외 시간에도 수동으로 테스트할 때 사용합니다.
+
+### Market Service — 일봉 캔들 (내부용)
+
+| Method | URL | 설명 |
+|--------|-----|------|
+| GET | `/api/stocks/{ticker}/candles?days=60` | 일봉 데이터 조회 (strategy-service 내부 호출) |
+
 ---
 
 ## 8. Kafka 이벤트 흐름
@@ -399,13 +486,14 @@ KIS API 키 없이도 전체 기능 테스트 가능.
 
 ### 실제 연동 시 사용하는 KIS API
 
-| 서비스 | 기능 | TR ID | URI |
+| 서비스 | 기능 | TR ID (모의/실제) | URI |
 |--------|------|-------|-----|
 | 공통 | Access Token 발급 | - | POST `/oauth2/tokenP` |
 | market-service | 국내 현재가 조회 | FHKST01010100 | GET `/uapi/domestic-stock/v1/quotations/inquire-price` |
-| order-service | 주식 매수 주문 | TTTC0802U | POST `/uapi/domestic-stock/v1/trading/order-cash` |
-| order-service | 주식 매도 주문 | TTTC0801U | POST `/uapi/domestic-stock/v1/trading/order-cash` |
-| portfolio-service | 잔고 조회 | TTTC8434R | GET `/uapi/domestic-stock/v1/trading/inquire-balance` |
+| market-service | 일봉(OHLCV) 수집 | FHKST03010100 | GET `/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice` |
+| order-service | 주식 매수 주문 | VTTC0802U / TTTC0802U | POST `/uapi/domestic-stock/v1/trading/order-cash` |
+| order-service | 주식 매도 주문 | VTTC0801U / TTTC0801U | POST `/uapi/domestic-stock/v1/trading/order-cash` |
+| portfolio-service | 잔고 조회 | VTTC8434R / TTTC8434R | GET `/uapi/domestic-stock/v1/trading/inquire-balance` |
 
 ---
 
@@ -428,6 +516,8 @@ KIS API 키 없이도 전체 기능 테스트 가능.
 | market-service | `market-service/src/main/resources/application.yml` |
 | order-service | `order-service/src/main/resources/application.yml` |
 | portfolio-service | `portfolio-service/src/main/resources/application.yml` |
+| strategy-service | `strategy-service/src/main/resources/application.yml` |
+| strategy-service (Slack) | `strategy-service/src/main/resources/application-secret.yml` |
 | 인프라 | `docker-compose.yml` |
 
 ### DB 접속 정보
@@ -463,10 +553,11 @@ docker ps
 
 각 서비스 폴더에서 실행:
 ```bash
-cd api-gateway      && gradle wrapper && cd ..
-cd market-service   && gradle wrapper && cd ..
-cd order-service    && gradle wrapper && cd ..
+cd api-gateway       && gradle wrapper && cd ..
+cd market-service    && gradle wrapper && cd ..
+cd order-service     && gradle wrapper && cd ..
 cd portfolio-service && gradle wrapper && cd ..
+cd strategy-service  && gradle wrapper && cd ..
 ```
 
 > Gradle이 없는 경우: https://gradle.org/install/ 에서 설치
@@ -499,6 +590,14 @@ cd D:/project/axiom/order-service
 cd D:/project/axiom/portfolio-service
 ./gradlew bootRun
 # 포트 8083 기동 확인
+```
+
+**터미널 5 - strategy-service:**
+```bash
+cd D:/project/axiom/strategy-service
+./gradlew bootRun
+# 포트 8084 기동 확인
+# 평일 09:05~15:20 사이 5분마다 자동 전략 실행
 ```
 
 ### Step 4: 프론트엔드 실행
@@ -537,6 +636,12 @@ curl http://localhost:8080/api/portfolio/balance
 
 # 주문 내역 조회
 curl http://localhost:8080/api/orders
+
+# 자동매매 전략 수동 실행 (전략 즉시 실행)
+curl -X POST http://localhost:8080/api/strategy/run
+
+# Slack 알림 연결 테스트
+curl -X POST http://localhost:8080/api/strategy/test-slack
 ```
 
 ## 12. 서비스 관리 명령어
@@ -556,8 +661,9 @@ netstat -ano | findstr ":808" | findstr "LISTENING"
 | `:8081` | market-service |
 | `:8082` | order-service |
 | `:8083` | portfolio-service |
+| `:8084` | strategy-service |
 
-4개 포트가 모두 `LISTENING` 상태이면 전체 정상 실행 중.
+5개 포트가 모두 `LISTENING` 상태이면 전체 정상 실행 중.
 
 **Health API 확인**
 ```powershell
@@ -565,6 +671,7 @@ curl http://localhost:8080/actuator/health
 curl http://localhost:8081/actuator/health
 curl http://localhost:8082/actuator/health
 curl http://localhost:8083/actuator/health
+curl http://localhost:8084/actuator/health
 ```
 각각 `{"status":"UP"}` 응답이 오면 정상.
 
@@ -679,13 +786,19 @@ kis:
 - [x] Kafka 이벤트 기반 포트폴리오 자동 갱신
 - [x] React PWA 프론트엔드 (대시보드/종목검색/주문/매매내역)
 - [x] 다크 테마 + 모바일 최적화 UI
+- [x] KIS 모의투자(Paper Trading) API 연동
+- [x] KIS Access Token 24시간 캐싱 + market-service 중앙화
+- [x] 주식 시장 운영시간 체크 (MarketHoursChecker)
+- [x] 일봉(OHLCV) 데이터 수집 및 DB 저장 (market.daily_candles)
+- [x] strategy-service 구축 (자동매매 전략 엔진)
+- [x] 골든크로스 전략 구현 (MA5/MA20)
+- [x] 스케줄러 기반 자동 전략 실행 (평일 09:05~15:20, 5분 주기)
+- [x] Slack Incoming Webhook 알림 (신호 발생 + 주문 체결)
 
 ### 진행 예정
-- [ ] KIS API 실제 연동 (API 키 발급 후)
-- [ ] KIS Access Token 자동 갱신 (2시간 만료 처리)
-- [ ] 자동매매 전략 레이어 구현
-  - [ ] 조건 기반 매매 로직 (이동평균, RSI 등)
-  - [ ] 스케줄러 기반 자동 주문 실행
+- [ ] KIS API 실제 연동 (실계좌 API 키 발급 후)
+- [ ] 추가 전략 구현 (MACD, RSI, 볼린저밴드)
+- [ ] 전략 설정 UI (프론트엔드에서 전략 ON/OFF, 종목·수량 설정)
 - [ ] 실시간 시세 (WebSocket / SSE)
 - [ ] 손익 계산 (현재가 기반 평가손익 표시)
 - [ ] 알림 기능 (목표가 도달 시 푸시 알림)
@@ -704,6 +817,41 @@ kis:
 ## 16. 변경 이력 (Changelog)
 
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
+
+---
+<details>
+<summary><strong>[v0.1.2] - 2026-03-02</strong> &nbsp;·&nbsp; 일봉 데이터 수집 + 자동매매 전략 엔진 (strategy-service) + Slack 알림</summary>
+
+<br>
+
+#### Added
+- **일봉(OHLCV) 데이터 수집** — market-service
+  - KIS `inquire-daily-itemchartprice` API (TR: `FHKST03010100`)로 종목별 일봉 수집
+  - 매일 15:40 자동 수집 스케줄러 (`CandleCollectScheduler`)
+  - PostgreSQL `market.daily_candles` 테이블 저장, `(ticker, trade_date)` UNIQUE 제약
+  - mock 모드 지원: 실제 API 없이도 랜덤 캔들 데이터 생성
+  - `GET /api/stocks/{ticker}/candles?days=60` 엔드포인트 추가
+- **strategy-service 신규 구축** (포트 8084)
+  - `TradingStrategy` 인터페이스 기반 전략 엔진 — Spring이 구현체를 자동 등록
+  - **골든크로스 전략** (`GoldenCrossStrategy`): MA5/MA20 이동평균 비교
+    - 전일 MA5 ≤ MA20, 당일 MA5 > MA20 → BUY 신호
+    - 전일 MA5 ≥ MA20, 당일 MA5 < MA20 → SELL 신호
+  - **StrategyScheduler**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행, 15:20 이후 스킵
+  - **StrategyEngine**: 설정된 ticker 목록 × 활성 전략을 순회하며 평가 → 신호 발생 시 자동 주문
+  - `POST /api/strategy/run` — 수동 즉시 실행 (테스트용)
+  - `POST /api/strategy/test-slack` — Slack 연동 확인용 테스트 메시지 발송
+- **Slack Incoming Webhook 알림** (`SlackNotifier`)
+  - 매매 신호 발생 시 BUY/SELL/HOLD 블록 알림
+  - 주문 체결 성공/실패 결과 알림
+  - 전략 실행 오류 발생 시 에러 알림
+- **api-gateway** strategy-service 라우팅 추가 (`/api/strategy/**` → 8084)
+- **KIS Access Token 중앙화** — market-service에서 단독 발급, order/portfolio-service는 `GET /internal/token`으로 위임 조회 (다중 서비스 동시 토큰 요청으로 인한 403 방지)
+
+#### Notes
+- strategy-service는 market-service의 캔들 데이터와 order-service의 주문 API를 의존함 — 실행 순서: market-service → order-service → strategy-service
+- 자동매매 전략은 `strategy-service/src/main/resources/application.yml`의 `strategy.watch-tickers`, `strategy.order-quantity`로 종목·수량 설정
+
+</details>
 
 ---
 <details>
