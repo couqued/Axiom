@@ -1,0 +1,48 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: market-service
+  config:
+    import: optional:classpath:application-secret.yml
+  datasource:
+    url: jdbc:postgresql://localhost:5432/axiom?currentSchema=market
+    username: axiom
+    password: axiom1234
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: market
+
+kis:
+  mode: paper   # mock | paper | real
+  paper:
+    base-url: https://openapivts.koreainvestment.com:29443
+    app-key: PLACEHOLDER
+    app-secret: PLACEHOLDER
+    account-no: PLACEHOLDER
+  real:
+    base-url: https://openapi.koreainvestment.com:9443
+    app-key: PLACEHOLDER
+    app-secret: PLACEHOLDER
+    account-no: PLACEHOLDER
+
+candle:
+  watch-tickers:   # 일봉 자동 수집 대상 종목 (스케줄러가 매일 15:40 수집)
+    - "005930"     # 삼성전자
+    - "000660"     # SK하이닉스
+    - "035420"     # NAVER
+    - "051910"     # LG화학
+    - "006400"     # 삼성SDI
+  default-days: 60 # 기본 조회 일수
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info

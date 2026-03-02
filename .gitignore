@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+**/build/
+**/.gradle/
+
+# Java
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# Spring Boot
+*.log
+logs/
+**/application-local.yml
+**/application-secret.yml
+
+# Node.js / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

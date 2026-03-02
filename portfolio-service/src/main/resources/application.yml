@@ -1,0 +1,51 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: portfolio-service
+  config:
+    import: optional:classpath:application-secret.yml
+  datasource:
+    url: jdbc:postgresql://localhost:5432/axiom?currentSchema=portfolio
+    username: axiom
+    password: axiom1234
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: portfolio
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: portfolio-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+
+kis:
+  mode: paper   # mock | paper | real
+  paper:
+    base-url: https://openapivts.koreainvestment.com:29443
+    app-key: PLACEHOLDER
+    app-secret: PLACEHOLDER
+    account-no: PLACEHOLDER
+  real:
+    base-url: https://openapi.koreainvestment.com:9443
+    app-key: PLACEHOLDER
+    app-secret: PLACEHOLDER
+    account-no: PLACEHOLDER
+
+market-service:
+  url: http://localhost:8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info

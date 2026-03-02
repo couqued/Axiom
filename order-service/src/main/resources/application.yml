@@ -1,0 +1,47 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: order-service
+  config:
+    import: optional:classpath:application-secret.yml
+  datasource:
+    url: jdbc:postgresql://localhost:5432/axiom?currentSchema=orders
+    username: axiom
+    password: axiom1234
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: orders
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+kis:
+  mode: paper   # mock | paper | real
+  paper:
+    base-url: https://openapivts.koreainvestment.com:29443
+    app-key: PLACEHOLDER
+    app-secret: PLACEHOLDER
+    account-no: PLACEHOLDER
+  real:
+    base-url: https://openapi.koreainvestment.com:9443
+    app-key: PLACEHOLDER
+    app-secret: PLACEHOLDER
+    account-no: PLACEHOLDER
+
+market-service:
+  url: http://localhost:8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info

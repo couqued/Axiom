@@ -1,0 +1,4 @@
+-- 각 서비스용 스키마 생성
+CREATE SCHEMA IF NOT EXISTS market;
+CREATE SCHEMA IF NOT EXISTS orders;
+CREATE SCHEMA IF NOT EXISTS portfolio;

@@ -1,0 +1,33 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: strategy-service
+  config:
+    import: optional:classpath:application-secret.yml
+
+strategy:
+  watch-tickers:       # 전략 감시 대상 종목
+    - "005930"         # 삼성전자
+    - "000660"         # SK하이닉스
+  candle-days: 60      # 지표 계산용 캔들 개수
+  order-quantity: 1    # 1회 주문 수량
+  enabled-strategies:  # 활성화할 전략 목록
+    - golden-cross     # 골든크로스/데드크로스 (3단계에서 구현)
+
+market-service:
+  url: http://localhost:8081
+
+order-service:
+  url: http://localhost:8082
+
+slack:
+  webhook-url: PLACEHOLDER   # application-secret.yml에서 실제 URL로 오버라이드
+  enabled: false             # true로 변경 시 실제 Slack 알림 발송
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
