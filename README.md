@@ -853,7 +853,6 @@ kis:
 
 </details>
 
----
 <details>
 <summary><strong>[v0.1.1] - 2026-03-01</strong> &nbsp;·&nbsp; KIS 모의투자 API 연동 + 주식 시장 운영시간 체크</summary>
 
