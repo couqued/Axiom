@@ -1,4 +1,5 @@
-# Stock Auto Trading Project
+# Automated Stock Trading System
+=======
 
 MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 
@@ -710,13 +711,6 @@ taskkill /IM java.exe /F
 ```powershell
 cd D:\kc\project\axiom
 docker-compose down
-```
-
-**Slack Webhook 설정 테스트**
-```powershell
-curl -X POST -H 'Content-type: application/json'
- --data '{"text":"Hello, Slack! Webhook 설정 성공! 🎉"}' 
- https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
 ```
 
 ---
