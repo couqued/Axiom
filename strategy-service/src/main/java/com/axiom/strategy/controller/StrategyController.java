@@ -3,8 +3,11 @@ package com.axiom.strategy.controller;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.engine.StrategyEngine;
 import com.axiom.strategy.notification.SlackNotifier;
+import com.axiom.strategy.service.MarketState;
+import com.axiom.strategy.service.MarketStateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,12 +23,28 @@ public class StrategyController {
 
     private final StrategyEngine strategyEngine;
     private final SlackNotifier slackNotifier;
+    private final MarketStateService marketStateService;
 
     /** 전략 즉시 실행 (테스트 / 수동 트리거용) */
     @PostMapping("/run")
     public ResponseEntity<Map<String, String>> run() {
         strategyEngine.run();
         return ResponseEntity.ok(Map.of("result", "전략 실행 완료. 로그를 확인하세요."));
+    }
+
+    /** 현재 시장 상태 조회 */
+    @GetMapping("/market-state")
+    public ResponseEntity<Map<String, String>> getMarketState() {
+        MarketState state = marketStateService.getCurrentState();
+        return ResponseEntity.ok(Map.of("state", state.name()));
+    }
+
+    /** 시장 상태 수동 갱신 (테스트용) */
+    @PostMapping("/refresh-market-state")
+    public ResponseEntity<Map<String, String>> refreshMarketState() {
+        marketStateService.refresh();
+        MarketState state = marketStateService.getCurrentState();
+        return ResponseEntity.ok(Map.of("state", state.name(), "result", "시장 상태 갱신 완료"));
     }
 
     /** Slack 알림 연결 테스트 */

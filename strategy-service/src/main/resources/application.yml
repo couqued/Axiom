@@ -8,19 +8,36 @@ spring:
     import: optional:classpath:application-secret.yml
 
 strategy:
-  watch-tickers:       # 전략 감시 대상 종목
+  watch-tickers:       # 전략 감시 대상 종목 (최대 수십 개 가능, 5~10개 권장)
     - "005930"         # 삼성전자
     - "000660"         # SK하이닉스
   candle-days: 60      # 지표 계산용 캔들 개수
   order-quantity: 1    # 1회 주문 수량
-  enabled-strategies:  # 활성화할 전략 목록
-    - golden-cross     # 골든크로스/데드크로스 (3단계에서 구현)
+  enabled-strategies:  # 전체 등록 (시장 상태에 따라 런타임에 필터링)
+    - golden-cross       # 상승장 — 스윙 (며칠~몇 주)
+    - volatility-breakout # 상승장 — 당일 매매
+    - rsi-bollinger      # 횡보장 — 단기~스윙 (1~5일)
+  market-filter:
+    enabled: true        # false 시 모든 전략 항상 실행
+    index-code: "0001"   # 코스피
+    ma-period: 20        # 20일 이평선
+  trailing-stop:
+    enabled: true
+    stop-percent: 7.0    # 고점 대비 7% 하락 시 청산
+  time-cut:
+    enabled: true
+    max-holding-days: 3  # 3거래일 미반등 시 강제 청산
+    applicable-strategies:
+      - rsi-bollinger
 
 market-service:
   url: http://localhost:8081
 
 order-service:
   url: http://localhost:8082
+
+portfolio-service:
+  url: http://localhost:8083
 
 slack:
   webhook-url: PLACEHOLDER   # application-secret.yml에서 실제 URL로 오버라이드

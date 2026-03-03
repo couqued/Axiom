@@ -174,21 +174,34 @@ axiom/
 │   ├── build.gradle
 │   └── src/main/java/com/axiom/strategy/
 │       ├── StrategyApplication.java
-│       ├── config/StrategyConfig.java    # @ConfigurationProperties, WebClient Bean
+│       ├── config/StrategyConfig.java    # @ConfigurationProperties, WebClient 3개 Bean
 │       ├── controller/
-│       │   └── StrategyController.java  # POST /api/strategy/run|test-slack
+│       │   └── StrategyController.java  # POST /api/strategy/run, GET /api/strategy/market-state
 │       ├── strategy/
-│       │   ├── TradingStrategy.java     # 전략 인터페이스
-│       │   └── GoldenCrossStrategy.java # MA5/MA20 골든크로스·데드크로스
-│       ├── engine/StrategyEngine.java   # 전략 순회 실행
-│       ├── scheduler/StrategyScheduler.java  # 평일 09:05~15:20 5분 주기
+│       │   ├── TradingStrategy.java            # 전략 인터페이스
+│       │   ├── GoldenCrossStrategy.java        # MA5/MA20 골든크로스·데드크로스
+│       │   ├── VolatilityBreakoutStrategy.java # 변동성 돌파 (상승장 단기)
+│       │   └── RsiBollingerStrategy.java       # RSI+볼린저밴드 통합 (횡보장)
+│       ├── engine/StrategyEngine.java   # 전략 순회 실행 + 시장 상태 필터링
+│       ├── scheduler/
+│       │   ├── StrategyScheduler.java    # 평일 09:05~15:20 5분 주기
+│       │   ├── MarketStateScheduler.java # 평일 08:30 시장 상태 갱신
+│       │   └── ForceExitScheduler.java   # 평일 15:20 변동성 돌파 포지션 강제 청산
+│       ├── service/
+│       │   ├── MarketStateService.java  # 코스피 MA로 시장 상태 판별
+│       │   ├── TrailingStopService.java # 트레일링 스탑 (고점 -7%)
+│       │   └── TimeCutService.java      # 타임 컷 (3거래일)
 │       ├── client/
-│       │   ├── MarketClient.java        # market-service 캔들 조회
-│       │   └── OrderClient.java         # order-service 주문 위임
+│       │   ├── MarketClient.java        # market-service 캔들/현재가/지수 조회
+│       │   ├── OrderClient.java         # order-service 주문 위임
+│       │   └── PortfolioClient.java     # portfolio-service 보유 포지션 조회
 │       ├── notification/SlackNotifier.java   # Slack Incoming Webhook 알림
+│       ├── util/TradingCalendar.java    # 거래일 계산 유틸
 │       └── dto/
 │           ├── CandleDto.java
 │           ├── SignalDto.java           # BUY / SELL / HOLD
+│           ├── StockPriceDto.java       # 현재가 (LiveCandle 생성용)
+│           ├── PortfolioItemDto.java    # 보유 포지션
 │           └── OrderRequest.java
 │
 └── frontend/                          # React PWA (port 5173)
@@ -278,23 +291,40 @@ OrderController.buy/sell()
 
 자동매매 전략 실행 및 Slack 알림 담당.
 
-- **전략 엔진**: `TradingStrategy` 인터페이스 기반, Spring이 구현체를 자동 등록
-- **골든크로스 전략**: MA5 / MA20 이동평균 비교
-  - 전일 MA5 ≤ MA20, 당일 MA5 > MA20 → **매수(BUY)**
-  - 전일 MA5 ≥ MA20, 당일 MA5 < MA20 → **매도(SELL)**
-- **스케줄러**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행
-- **Slack 알림**: 매매 신호 발생 시 + 주문 체결 결과 알림
+- **하이브리드 전략 엔진**: 시장 상태(BULLISH/SIDEWAYS)를 먼저 판별한 뒤 적합한 전략 자동 선택
+  - **상승장(BULLISH)**: 변동성 돌파 + 골든크로스 동시 실행
+  - **횡보장(SIDEWAYS)**: RSI + 볼린저밴드 통합 전략 실행
+- **시장 상태 판별**: 매일 08:30 코스피 지수 20일 이동평균 계산 → BULLISH / SIDEWAYS 분류
+- **리스크 관리**: 트레일링 스탑(고점 -7%) + 타임 컷(RSI+볼린저 매수 후 3거래일)
+- **스케줄러**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행 / 15:20 변동성 돌파 강제 청산
+- **Slack 알림**: 매매 신호 발생 시 + 주문 체결 결과 + 트레일링 스탑/타임 컷 청산 알림
 - **수동 트리거**: `POST /api/strategy/run` — 즉시 실행 (테스트용)
 
 **자동매매 흐름:**
 ```
+MarketStateScheduler (매일 08:30)
+  → MarketStateService.refresh()
+    → MarketClient → market-service (코스피 지수 캔들 조회)
+    → MA20 계산 → MarketState 갱신 (BULLISH / SIDEWAYS)
+
 StrategyScheduler (5분 주기)
   → StrategyEngine.run()
-    → MarketClient → market-service (일봉 캔들 조회)
-    → GoldenCrossStrategy.evaluate() → BUY / SELL / HOLD
-    → SlackNotifier.sendSignal() (신호 알림)
-    → OrderClient → order-service (BUY/SELL 시 주문)
-    → SlackNotifier.sendOrderFilled() (체결 결과 알림)
+    → PortfolioClient → portfolio-service (보유 포지션 조회)
+    → 각 ticker별:
+        MarketClient → market-service (현재가 + 캔들 조회)
+        LiveCandle 생성 (현재가를 당일 캔들로 주입)
+        시장 상태에 따라 전략 선택:
+          BULLISH  → [변동성 돌파, 골든크로스]
+          SIDEWAYS → [RSI+볼린저밴드]
+        전략.evaluate() → BUY / SELL / HOLD
+        SlackNotifier.sendSignal() (신호 알림)
+        OrderClient → order-service (BUY/SELL 시 주문)
+        SlackNotifier.sendOrderFilled() (체결 결과 알림)
+        TrailingStopService.check() (트레일링 스탑)
+        TimeCutService.checkAndCut() (타임 컷)
+
+ForceExitScheduler (매일 15:20)
+  → 변동성 돌파 전략 당일 매수 포지션 강제 청산
 ```
 
 ---
@@ -438,15 +468,19 @@ PostgreSQL 단일 인스턴스, 스키마 분리 방식.
 |--------|-----|------|
 | POST | `/api/strategy/run` | 전략 즉시 실행 (수동 트리거) |
 | POST | `/api/strategy/test-slack` | Slack 알림 연결 테스트 |
+| GET | `/api/strategy/market-state` | 현재 시장 상태 조회 (BULLISH/SIDEWAYS) |
+| POST | `/api/strategy/refresh-market-state` | 시장 상태 수동 갱신 |
 
 > strategy-service는 스케줄러(평일 09:05~15:20, 5분 주기)로 자동 실행됩니다.
 > `/api/strategy/run`은 장 외 시간에도 수동으로 테스트할 때 사용합니다.
 
-### Market Service — 일봉 캔들 (내부용)
+### Market Service — 내부 호출 (strategy-service → market-service)
 
 | Method | URL | 설명 |
 |--------|-----|------|
-| GET | `/api/stocks/{ticker}/candles?days=60` | 일봉 데이터 조회 (strategy-service 내부 호출) |
+| GET | `/api/stocks/{ticker}/candles?days=60` | 일봉 데이터 조회 |
+| GET | `/api/stocks/{ticker}/price` | 현재가 조회 (LiveCandle 생성용) |
+| GET | `/api/index/{code}/candles?days=25` | 지수 일봉 조회 (코스피: `0001`, 코스닥: `1001`) |
 
 ---
 
@@ -794,10 +828,17 @@ kis:
 - [x] 골든크로스 전략 구현 (MA5/MA20)
 - [x] 스케줄러 기반 자동 전략 실행 (평일 09:05~15:20, 5분 주기)
 - [x] Slack Incoming Webhook 알림 (신호 발생 + 주문 체결)
+- [x] 하이브리드 전략 아키텍처 (시장 상태 기반 전략 자동 선택)
+- [x] 시장 상태 판별 (코스피 MA20 → BULLISH/SIDEWAYS)
+- [x] 변동성 돌파 전략 구현 (상승장 단기 매매)
+- [x] RSI + 볼린저밴드 통합 전략 구현 (횡보장 스윙 매매)
+- [x] 트레일링 스탑 (고점 -7% 하락 시 자동 청산)
+- [x] 타임 컷 (RSI+볼린저 매수 후 3거래일 미반등 시 강제 청산)
+- [x] portfolio-service 연동 (보유 포지션 기반 리스크 관리)
 
 ### 진행 예정
 - [ ] KIS API 실제 연동 (실계좌 API 키 발급 후)
-- [ ] 추가 전략 구현 (MACD, RSI, 볼린저밴드)
+- [ ] 추가 전략 구현 (MACD — 추세 지속성 확인)
 - [ ] 전략 설정 UI (프론트엔드에서 전략 ON/OFF, 종목·수량 설정)
 - [ ] 실시간 시세 (WebSocket / SSE)
 - [ ] 손익 계산 (현재가 기반 평가손익 표시)
@@ -819,6 +860,56 @@ kis:
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
 
 ---
+<details>
+<summary><strong>[v0.2.0] - 2026-03-03</strong> &nbsp;·&nbsp; 하이브리드 자동매매 전략 (시장 상태 기반 전략 선택 + 리스크 관리)</summary>
+
+<br>
+
+#### Added
+- **하이브리드 전략 아키텍처** — strategy-service
+  - `MarketState` enum (`BULLISH` / `SIDEWAYS`) + `MarketStateService`: 코스피 지수 20일 이동평균으로 시장 상태 판별
+  - `MarketStateScheduler`: 매일 08:30 자동 갱신 (`cron: 0 30 8 * * MON-FRI`)
+  - `GET /api/strategy/market-state`: 현재 시장 상태 조회
+  - `POST /api/strategy/refresh-market-state`: 수동 갱신 트리거
+- **변동성 돌파 전략** (`VolatilityBreakoutStrategy`) — 상승장 단기 매매
+  - 목표가 = 당일 시가 + (전일 고가 - 전일 저가) × K(0.5)
+  - 현재가 ≥ 목표가 → BUY (당일 중복 매수 방지 포함)
+  - `ForceExitScheduler`: 매일 15:20 변동성 돌파 포지션 강제 청산 (오버나이트 방지)
+- **RSI + 볼린저밴드 통합 전략** (`RsiBollingerStrategy`) — 횡보장 스윙 매매
+  - BUY 조건: RSI(14) < 30 **AND** 종가 < 볼린저밴드 하단 (두 지표 동시 과매도 확인)
+  - SELL 조건: RSI(14) > 70 **OR** 종가 ≥ 볼린저밴드 중심선(MA20)
+  - Wilder's Smoothed RSI + 볼린저밴드 20일/2σ
+- **트레일링 스탑** (`TrailingStopService`)
+  - 보유 종목별 고점 추적, 고점 대비 7% 하락 시 자동 SELL
+  - Slack 알림: 🛑 [트레일링 스탑] 청산 시 발송
+- **타임 컷** (`TimeCutService`)
+  - RSI+볼린저밴드 전략으로 매수 후 3거래일 내 미반등 시 강제 SELL
+  - `TradingCalendar` 유틸: 주말 제외 거래일 계산
+  - Slack 알림: ⏱️ [타임 컷] 청산 시 발송
+- **LiveCandle 주입** — `StrategyEngine` 개선
+  - 현재가(`getCurrentPrice()`)를 당일 캔들로 변환해 역사적 캔들 목록 마지막에 추가
+  - 변동성 돌파 전략의 장중 현재가 기반 매수 조건 판별 가능
+- **portfolio-service 연동** (`PortfolioClient`)
+  - 보유 포지션 조회 → 트레일링 스탑·타임 컷 대상 종목 확인
+- **IndexCandleService** — market-service 신규
+  - 코스피(0001)/코스닥(1001) 지수 일봉 제공
+  - `GET /api/index/{code}/candles?days=N` 엔드포인트 추가
+  - KIS paper 모드 미지원 시 mock 데이터 자동 폴백
+
+#### Changed
+- `StrategyEngine`: 시장 상태 기반 전략 필터링 추가 (BULLISH → 변동성돌파+골든크로스, SIDEWAYS → RSI+볼린저밴드)
+- `StrategyConfig`: `MarketFilterConfig`, `TrailingStopConfig`, `TimeCutConfig` 중첩 설정 클래스 추가 + portfolio WebClient Bean 추가
+- `MarketClient`: `getCurrentPrice()`, `getIndexCandles()` 메서드 추가
+- `CandleDto`: `@Builder`, `@AllArgsConstructor` 추가 (LiveCandle 생성용)
+- `application.yml`: `market-filter`, `trailing-stop`, `time-cut`, `portfolio-service` 설정 추가
+
+#### Notes
+- 시장 상태 필터는 `strategy.market-filter.enabled: false`로 비활성화 시 모든 전략 항상 실행
+- 트레일링 스탑·타임 컷의 상태(고점, 매수일)는 메모리(`ConcurrentHashMap`)에만 보관 → 서비스 재시작 시 초기화
+- 변동성 돌파 전략의 강제 청산은 portfolio-service와의 연동으로 실제 보유 여부 확인 후 실행
+
+</details>
+
 <details>
 <summary><strong>[v0.1.2] - 2026-03-02</strong> &nbsp;·&nbsp; 일봉 데이터 수집 + 자동매매 전략 엔진 (strategy-service) + Slack 알림</summary>
 
