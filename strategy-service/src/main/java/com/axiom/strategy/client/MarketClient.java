@@ -53,6 +53,23 @@ public class MarketClient {
     }
 
     /**
+     * market-service에서 스크리닝된 감시 종목 목록 조회.
+     * 코스피200 + 코스닥150 유니버스 기반. 실패 시 빈 리스트 반환 → StrategyEngine이 yml fallback 사용.
+     */
+    public List<String> getScreenedTickers() {
+        try {
+            return marketWebClient.get()
+                    .uri("/internal/screened-tickers")
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<List<String>>() {})
+                    .block();
+        } catch (Exception e) {
+            log.warn("[MarketClient] screened-tickers 조회 실패 — yml fallback 사용: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * market-service에서 지수 일봉 데이터 조회 (시장 상태 판별용).
      *
      * @param indexCode 지수 코드 ("0001" = 코스피, "1001" = 코스닥)

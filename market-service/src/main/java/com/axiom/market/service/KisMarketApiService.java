@@ -63,6 +63,7 @@ public class KisMarketApiService {
                 .volume(rand.nextLong(5000000) + 100000)
                 .fetchedAt(LocalDateTime.now())
                 .mock(true)
+                .marketWarnCode("00")
                 .build();
     }
 
@@ -98,6 +99,9 @@ public class KisMarketApiService {
         // 종목명: bstp_kor_isnm (업종한글종목명) 사용, 없으면 ticker 반환
         String stockName = output.getOrDefault("bstp_kor_isnm", ticker);
 
+        // 시장경보코드: "00"=정상, "01"=투자주의, "02"=투자경고, "03"=투자위험
+        String marketWarnCode = output.getOrDefault("mrkt_warn_cls_code", "00");
+
         return StockPriceDto.builder()
                 .ticker(ticker)
                 .stockName(stockName)
@@ -110,6 +114,7 @@ public class KisMarketApiService {
                 .volume(Long.parseLong(output.get("acml_vol")))
                 .fetchedAt(LocalDateTime.now())
                 .mock(false)
+                .marketWarnCode(marketWarnCode)
                 .build();
     }
 }

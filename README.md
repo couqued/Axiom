@@ -103,7 +103,7 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 **서비스 간 통신:**
 - `order-service → Kafka`: 주문 체결 이벤트 발행
 - `portfolio-service ← Kafka`: 체결 이벤트 소비 → 포트폴리오 자동 갱신
-- `strategy-service → market-service`: REST (일봉 캔들 데이터 조회)
+- `strategy-service → market-service`: REST (일봉 캔들 데이터 조회, 감시 종목 목록 조회)
 - `strategy-service → order-service`: REST (자동 매수/매도 주문 위임)
 - `order-service, portfolio-service → market-service`: REST (KIS Access Token 위임 조회 `/internal/token`)
 
@@ -132,13 +132,18 @@ axiom/
 │       ├── MarketApplication.java
 │       ├── config/KisApiConfig.java   # KIS WebClient 설정
 │       ├── controller/
-│       │   └── StockController.java   # GET /api/stocks/**
+│       │   ├── StockController.java       # GET /api/stocks/**
+│       │   └── InternalMarketController.java  # GET /internal/screened-tickers (내부용)
 │       ├── service/
-│       │   ├── KisMarketApiService.java  # 현재가 조회 (mock/실제)
-│       │   └── StockSearchService.java   # 종목 검색 (mock 데이터)
+│       │   ├── KisMarketApiService.java   # 현재가 조회 (mock/실제, 시장경보 코드 포함)
+│       │   ├── StockSearchService.java    # 종목 검색 (mock 데이터)
+│       │   └── StockScreenerService.java  # 코스피200+코스닥150 유니버스 로드 및 캐싱
 │       └── dto/
-│           ├── StockPriceDto.java
-│           └── StockInfoDto.java
+│           ├── StockPriceDto.java         # marketWarnCode (시장경보) 포함
+│           ├── StockInfoDto.java
+│           └── StockUniverse.java         # stock-universe.json 역직렬화 DTO
+│   └── src/main/resources/
+│       └── stock-universe.json            # 코스피200 + 코스닥150 종목 코드 목록
 │
 ├── order-service/                     # 주문 서비스 (port 8082)
 │   ├── build.gradle
@@ -200,7 +205,7 @@ axiom/
 │       └── dto/
 │           ├── CandleDto.java
 │           ├── SignalDto.java           # BUY / SELL / HOLD
-│           ├── StockPriceDto.java       # 현재가 (LiveCandle 생성용)
+│           ├── StockPriceDto.java       # 현재가 (LiveCandle 생성용, marketWarnCode 포함)
 │           ├── PortfolioItemDto.java    # 보유 포지션
 │           └── OrderRequest.java
 │
@@ -291,10 +296,12 @@ OrderController.buy/sell()
 
 자동매매 전략 실행 및 Slack 알림 담당.
 
+- **감시 종목 관리**: 코스피200 + 코스닥150(107개)을 `stock-universe.json`에서 로드. 매일 08:30 `market-service /internal/screened-tickers`에서 동적으로 갱신. 서비스 재시작 시 `yml watch-tickers`로 fallback.
 - **하이브리드 전략 엔진**: 시장 상태(BULLISH/SIDEWAYS)를 먼저 판별한 뒤 적합한 전략 자동 선택
   - **상승장(BULLISH)**: 변동성 돌파 + 골든크로스 동시 실행
   - **횡보장(SIDEWAYS)**: RSI + 볼린저밴드 통합 전략 실행
 - **시장 상태 판별**: 매일 08:30 코스피 지수 20일 이동평균 계산 → BULLISH / SIDEWAYS 분류
+- **포지션 사이징**: 1회 매수 금액 50만 원 기준 수량 자동 계산(`floor(투자금액/현재가)`). 동시 최대 3종목. BUY 3단계 가드(시장경보/중복 방지/maxPositions 초과). SELL 시 portfolio 보유 수량 전량 매도.
 - **리스크 관리**: 트레일링 스탑(고점 -7%) + 타임 컷(RSI+볼린저 매수 후 3거래일)
 - **스케줄러**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행 / 15:20 변동성 돌파 강제 청산
 - **Slack 알림**: 매매 신호 발생 시 + 주문 체결 결과 + 트레일링 스탑/타임 컷 청산 알림
@@ -302,7 +309,12 @@ OrderController.buy/sell()
 
 **자동매매 흐름:**
 ```
-MarketStateScheduler (매일 08:30)
+StockScreenerService (매일 08:20, market-service)
+  → stock-universe.json 로드 → 코스피200+코스닥150 종목 목록 캐싱
+
+MarketStateScheduler (매일 08:30, strategy-service)
+  → MarketClient → market-service /internal/screened-tickers
+    → StrategyEngine.watchTickers 동적 갱신
   → MarketStateService.refresh()
     → MarketClient → market-service (코스피 지수 캔들 조회)
     → MA20 계산 → MarketState 갱신 (BULLISH / SIDEWAYS)
@@ -317,6 +329,11 @@ StrategyScheduler (5분 주기)
           BULLISH  → [변동성 돌파, 골든크로스]
           SIDEWAYS → [RSI+볼린저밴드]
         전략.evaluate() → BUY / SELL / HOLD
+        BUY 3단계 가드:
+          ① 시장경보 종목(isSafe() = false) → 스킵
+          ② 이미 보유 중 → 스킵
+          ③ 보유 수량 + 이번 사이클 매수 수 ≥ maxPositions(3) → 스킵
+        수량 계산 = floor(50만 원 / 현재가)
         SlackNotifier.sendSignal() (신호 알림)
         OrderClient → order-service (BUY/SELL 시 주문)
         SlackNotifier.sendOrderFilled() (체결 결과 알림)
@@ -481,6 +498,7 @@ PostgreSQL 단일 인스턴스, 스키마 분리 방식.
 | GET | `/api/stocks/{ticker}/candles?days=60` | 일봉 데이터 조회 |
 | GET | `/api/stocks/{ticker}/price` | 현재가 조회 (LiveCandle 생성용) |
 | GET | `/api/index/{code}/candles?days=25` | 지수 일봉 조회 (코스피: `0001`, 코스닥: `1001`) |
+| GET | `/internal/screened-tickers` | 코스피200+코스닥150 감시 종목 목록 조회 |
 
 ---
 
@@ -835,6 +853,12 @@ kis:
 - [x] 트레일링 스탑 (고점 -7% 하락 시 자동 청산)
 - [x] 타임 컷 (RSI+볼린저 매수 후 3거래일 미반등 시 강제 청산)
 - [x] portfolio-service 연동 (보유 포지션 기반 리스크 관리)
+- [x] 종목 스크리닝 서비스 (코스피200+코스닥150 유니버스 로드, `stock-universe.json`)
+- [x] 동적 감시 종목 갱신 (매일 08:30 market-service에서 자동 갱신, yml fallback)
+- [x] 시장경보 종목 BUY 스킵 (KIS `mrkt_warn_cls_code` 확인, `isSafe()`)
+- [x] 포지션 사이징 (1회 50만 원, 수량 = `floor(투자금액/현재가)`)
+- [x] 최대 보유 종목 수 제한 (`maxPositions=3`, BUY 3단계 가드 + `boughtThisRun` 카운터)
+- [x] 전량 매도 연동 (portfolio-service 보유 수량 기반 SELL)
 
 ### 진행 예정
 - [ ] KIS API 실제 연동 (실계좌 API 키 발급 후)
@@ -860,6 +884,50 @@ kis:
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
 
 ---
+<details>
+<summary><strong>[v0.3.0] - 2026-03-05</strong> &nbsp;·&nbsp; 종목 스크리닝 + 포지션 사이징 + 예산 관리</summary>
+
+<br>
+
+#### Added
+- **종목 스크리닝 서비스** (`StockScreenerService`) — market-service 신규
+  - `stock-universe.json`: 코스피200(85개) + 코스닥150(22개) = 107개 종목 코드 관리 (KRX 리밸런싱 주기 반영 필요)
+  - `@PostConstruct` 초기 로드 + `@Scheduled(cron: 0 20 8 * * MON-FRI)` 매일 08:20 갱신
+  - `GET /internal/screened-tickers`: strategy-service 전용 내부 API
+  - `StockUniverse.java`: stock-universe.json 역직렬화 DTO
+  - `InternalMarketController.java`: 내부 전용 엔드포인트 컨트롤러
+- **동적 감시 종목 갱신** (`StrategyEngine`) — strategy-service
+  - `volatile List<String> watchTickers`: 서비스 재시작 시 `yml watch-tickers`로 fallback 초기화 (`@PostConstruct`)
+  - `MarketStateScheduler(08:30)`: 시장 상태 갱신 전 market-service `/internal/screened-tickers`에서 최신 종목 목록 갱신
+  - `MarketClient.getScreenedTickers()` 메서드 추가
+- **시장경보 종목 BUY 스킵**
+  - `KisMarketApiService`: KIS API 응답의 `mrkt_warn_cls_code` 파싱 (`00`=정상, `01`=투자주의, `02`=투자경고, `03`=투자위험)
+  - `StockPriceDto.isSafe()`: BUY 신호 발생 시 시장경보 종목 자동 제외
+- **포지션 사이징** (`StrategyConfig.PositionSizingConfig`) — strategy-service
+  - `investAmountKrw: 500000` — 1회 매수 금액 50만 원 고정
+  - 매수 수량 = `floor(투자금액 / 현재가)` (최소 1주 미달 시 BUY 스킵 + Slack 경고)
+- **BUY 3단계 가드** (`StrategyEngine`)
+  - ① 시장경보 종목 스킵 (`isSafe()`)
+  - ② 이미 보유 중인 종목 스킵 (portfolio 보유 목록과 대조)
+  - ③ 최대 보유 종목 수(`maxPositions=3`) 초과 시 스킵 (`boughtThisRun[]` 카운터로 동일 사이클 내 신규 매수 수 추적)
+- **SELL 전량 매도** (`StrategyEngine`)
+  - 매도 신호 시 portfolio-service에서 실제 보유 수량 조회 → 전량 매도
+  - 보유 없는 종목에 SELL 신호 발생 시 자동 스킵
+
+#### Changed
+- `StrategyConfig`: `orderQuantity` 제거 → `PositionSizingConfig` (`investAmountKrw`, `maxPositions`) 추가
+- `application.yml` (strategy-service): `order-quantity` 제거 → `position-sizing` 블록 추가
+- `MarketStateScheduler`: 시장 상태 갱신 전 감시 종목 목록 자동 갱신 역할 추가
+- `StockPriceDto` (market-service, strategy-service): `marketWarnCode` 필드 + `isSafe()` 추가
+
+#### Notes
+- `stock-universe.json`은 KRX 6/12월 리밸런싱에 맞춰 수동 업데이트 필요
+- 예산 구조: 50만 원 × 최대 3종목 = **최대 150만 원 동시 투자**
+- `boughtThisRun[]` 카운터로 동일 5분 사이클 내 신규 매수 수를 추적하여 `maxPositions` 초과 방지
+- 트레일링 스탑·타임 컷의 상태는 메모리(`ConcurrentHashMap`)에만 보관 → 서비스 재시작 시 초기화
+
+</details>
+
 <details>
 <summary><strong>[v0.2.0] - 2026-03-03</strong> &nbsp;·&nbsp; 하이브리드 자동매매 전략 (시장 상태 기반 전략 선택 + 리스크 관리)</summary>
 

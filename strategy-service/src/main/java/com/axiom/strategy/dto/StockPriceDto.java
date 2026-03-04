@@ -19,4 +19,9 @@ public class StockPriceDto {
     private BigDecimal openPrice;    // 시가
     private Long volume;
     private boolean mock;
+    private String marketWarnCode;   // "00"=정상, "01"=투자주의, "02"=투자경고, "03"=투자위험
+
+    public boolean isSafe() {
+        return marketWarnCode == null || "00".equals(marketWarnCode);
+    }
 }

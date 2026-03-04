@@ -18,8 +18,8 @@ public class StrategyConfig {
 
     private List<String> watchTickers;
     private int candleDays = 60;
-    private int orderQuantity = 1;
     private List<String> enabledStrategies;
+    private PositionSizingConfig positionSizing = new PositionSizingConfig();
 
     private MarketFilterConfig marketFilter = new MarketFilterConfig();
     private TrailingStopConfig trailingStop = new TrailingStopConfig();
@@ -50,6 +50,16 @@ public class StrategyConfig {
     }
 
     // ── 중첩 설정 클래스 ─────────────────────────────────────────────────────
+
+    /** 포지션 사이징 설정 */
+    @Getter
+    @Setter
+    public static class PositionSizingConfig {
+        /** 1회 매수 투자 금액(원). 수량 = floor(investAmountKrw / 현재가) */
+        private int investAmountKrw = 500000;
+        /** 동시에 보유할 수 있는 최대 종목 수. 초과 시 BUY 스킵 */
+        private int maxPositions = 3;
+    }
 
     /** 시장 필터 설정 (코스피 20일 MA 기준 상승장/횡보장 판별) */
     @Getter

@@ -156,22 +156,26 @@ market-service/
     │   │   └── CandleConfig.java          ← 일봉 수집 설정 (watch-tickers)
     │   ├── controller/
     │   │   ├── StockController.java       ← GET /api/stocks/**
-    │   │   └── InternalTokenController.java ← GET /internal/token (내부용)
+    │   │   ├── InternalTokenController.java ← GET /internal/token (내부용)
+    │   │   └── InternalMarketController.java ← GET /internal/screened-tickers (신규)
     │   ├── service/
     │   │   ├── KisTokenService.java       ← KIS 토큰 발급/캐싱
-    │   │   ├── KisMarketApiService.java   ← 현재가 조회 (mock/paper/real)
+    │   │   ├── KisMarketApiService.java   ← 현재가 조회 (mock/paper/real, mrkt_warn_cls_code 포함)
     │   │   ├── StockSearchService.java    ← 종목 검색 (mock 하드코딩)
     │   │   ├── CandleService.java         ← 일봉 조회/수집/저장
-    │   │   └── IndexCandleService.java    ← 지수 일봉 조회 (코스피/코스닥)
+    │   │   ├── IndexCandleService.java    ← 지수 일봉 조회 (코스피/코스닥)
+    │   │   └── StockScreenerService.java  ← 코스피200+코스닥150 유니버스 로드 및 캐싱 (신규)
     │   ├── entity/DailyCandle.java        ← market.daily_candles 엔티티
     │   ├── repository/DailyCandleRepository.java
     │   ├── scheduler/CandleCollectScheduler.java ← 평일 15:40 자동 수집
     │   └── dto/
-    │       ├── StockPriceDto.java
+    │       ├── StockPriceDto.java         ← marketWarnCode + isSafe() 포함 (신규 필드)
     │       ├── StockInfoDto.java
-    │       └── CandleDto.java
+    │       ├── CandleDto.java
+    │       └── StockUniverse.java         ← stock-universe.json 역직렬화 DTO (신규)
     └── resources/
         ├── application.yml
+        ├── stock-universe.json            ← 코스피200+코스닥150 종목 코드 목록 (신규)
         └── application-secret.yml         ← KIS API 키 (gitignore)
 ```
 
@@ -272,10 +276,47 @@ GET /internal/token
 
 ```
 getCurrentPrice(ticker)
-  mock  → 종목별 기준가 ± 랜덤 변동 (최대 ±10,000원)
+  mock  → 종목별 기준가 ± 랜덤 변동 (최대 ±10,000원), marketWarnCode="00" 고정
   paper/real → KIS inquire-price API 호출
                TR: FHKST01010100
-               반환: 현재가, 등락, 고/저/시가, 거래량
+               반환: 현재가, 등락, 고/저/시가, 거래량, mrkt_warn_cls_code
+               mrkt_warn_cls_code → StockPriceDto.marketWarnCode 매핑
+```
+
+### `StockPriceDto.java` (market-service)
+
+```java
+private String marketWarnCode;  // "00"=정상, "01"=투자주의, "02"=투자경고, "03"=투자위험
+
+public boolean isSafe() {
+    return marketWarnCode == null || "00".equals(marketWarnCode);
+}
+// strategy-service에서 BUY 신호 시 isSafe() = false 이면 매수 스킵
+```
+
+### `StockScreenerService.java` (신규)
+
+```
+@PostConstruct: 서비스 기동 시 stock-universe.json 로드
+@Scheduled(cron = "0 20 8 * * MON-FRI"): 매일 08:20 갱신
+
+refresh():
+  ClassPathResource("stock-universe.json") 읽기
+    → StockUniverse 역직렬화
+    → kospi200 + kosdaq150 병합 → List<String>
+    → cachedTickers (volatile) 갱신
+
+getScreenedTickers() → cachedTickers 반환
+  → InternalMarketController를 통해 strategy-service가 주기적으로 조회
+```
+
+### `InternalMarketController.java` (신규)
+
+```java
+GET /internal/screened-tickers
+  → StockScreenerService.getScreenedTickers() 반환
+  → api-gateway 라우팅 없음 (외부 노출 안 됨)
+  → strategy-service 전용 내부 API
 ```
 
 ### `StockSearchService.java`
@@ -324,6 +365,7 @@ collectCandle(ticker, date) — 스케줄러 전용
 | GET | `/api/stocks/{ticker}/candles?days=60` | `/api/market/stocks/{ticker}/candles` | 일봉 조회 |
 | GET | `/api/index/{code}/candles?days=N` | 없음 (내부 전용) | 지수 일봉 조회 (strategy-service 전용) |
 | GET | `/internal/token` | 없음 (내부 전용) | KIS 토큰 위임 |
+| GET | `/internal/screened-tickers` | 없음 (내부 전용) | 코스피200+코스닥150 감시 종목 목록 (strategy-service 전용) |
 
 ---
 
@@ -706,7 +748,7 @@ strategy-service/
     │   └── dto/
     │       ├── CandleDto.java
     │       ├── SignalDto.java                  ← BUY / SELL / HOLD
-    │       ├── StockPriceDto.java              ← 현재가 (LiveCandle 생성용)
+    │       ├── StockPriceDto.java              ← 현재가 (LiveCandle 생성용, marketWarnCode 포함)
     │       ├── PortfolioItemDto.java           ← 보유 포지션
     │       └── OrderRequest.java
     └── resources/
@@ -733,9 +775,13 @@ server:
   port: 8084
 
 strategy:
-  watch-tickers: ["005930", "000660"]   # 감시 종목 (5~10개 권장)
+  watch-tickers:                        # yml fallback (08:30 이전 또는 market-service 응답 실패 시)
+    - "005930"                          # 삼성전자
+    - "000660"                          # SK하이닉스
   candle-days: 60                       # 캔들 조회 기간
-  order-quantity: 1                     # 1회 주문 수량
+  position-sizing:
+    invest-amount-krw: 500000           # 1회 매수 금액(원). 수량 = floor(금액 / 현재가)
+    max-positions: 3                    # 동시에 보유할 수 있는 최대 종목 수
   enabled-strategies:                   # 전체 등록 (시장 상태에 따라 런타임 필터링)
     - golden-cross
     - volatility-breakout
@@ -856,45 +902,53 @@ refresh():
 ```java
 // Spring이 @Component 붙은 TradingStrategy 구현체 전부를 자동 주입
 private final List<TradingStrategy> strategies;
+private volatile List<String> watchTickers;  // 동적 갱신 (MarketStateScheduler가 갱신)
+
+@PostConstruct
+void init() { watchTickers = strategyConfig.getWatchTickers(); }  // yml fallback 초기화
+
+void updateWatchTickers(List<String> tickers) { watchTickers = tickers; }  // 08:30 갱신
 
 public void run() {
-    positions = portfolioClient.getPositions()          // ① 보유 포지션 조회
-    marketState = marketStateService.getCurrentState()  // ② 시장 상태 확인
-    activeNames = getActiveStrategyNames(marketState)   // ③ 전략 필터링
+    positions       = portfolioClient.getPositions()          // ① 보유 포지션 조회
+    marketState     = marketStateService.getCurrentState()    // ② 시장 상태 확인
+    activeNames     = getActiveStrategyNames(marketState)     // ③ 전략 필터링
+    maxPositions    = positionSizing.getMaxPositions()        // ④ 최대 보유 수
+    int[] boughtThisRun = {0}                                 // ⑤ 이번 사이클 신규 매수 수
 
     for (ticker in watchTickers):
         currentPrice = marketClient.getCurrentPrice(ticker)
         historical   = marketClient.getCandles(ticker, candleDays)
-        liveCandle   = CandleDto.builder()              // ④ LiveCandle 생성
-                           .openPrice(currentPrice.getOpenPrice())
-                           .closePrice(currentPrice.getCurrentPrice())
-                           .highPrice(currentPrice.getHighPrice())
-                           .lowPrice(currentPrice.getLowPrice())
-                           .build()
-        allCandles = historical + [liveCandle]
+        liveCandle   = CandleDto(openPrice, closePrice=currentPrice, highPrice, lowPrice)
+        allCandles   = historical + [liveCandle]
 
         for (strategy in strategies):
             if (strategy.getName() not in activeNames) skip
             if (allCandles.size() < minimumCandles) skip
 
             signal = strategy.evaluate(ticker, allCandles)
-            handleSignal(signal, ticker, currentPrice)  // ⑤ BUY/SELL 처리
 
-        trailingStopService.check(ticker, currentPrice, positions)  // ⑥ 트레일링 스탑
-        timeCutService.checkAndCut(ticker, currentPrice, positions) // ⑦ 타임 컷
+            if (signal.isBUY()):
+                ① !currentPrice.isSafe() → 시장경보 스킵
+                ② positions.contains(ticker) → 이미 보유 스킵
+                ③ positions.size() + boughtThisRun[0] >= maxPositions → 한도 초과 스킵
+            if (handleSignal(signal, positions) && signal.isBUY()):
+                boughtThisRun[0]++
+
+        trailingStopService.check(ticker, currentPrice, positions)
+        timeCutService.checkAndCut(ticker, currentPrice, positions)
 }
 
-getActiveStrategyNames(MarketState state):
-  market-filter.enabled=false → 모든 enabled-strategies 반환
-  BULLISH  → ["volatility-breakout", "golden-cross"]
-  SIDEWAYS → ["rsi-bollinger"]
+// handleSignal(): BUY — quantity = floor(investAmountKrw / price), SELL — portfolio 전량
+// getActiveStrategyNames(): BULLISH→["volatility-breakout","golden-cross"], SIDEWAYS→["rsi-bollinger"]
 ```
 
 ### 스케줄러 전체 구조
 
 | Cron | 클래스 | 역할 |
 |------|--------|------|
-| `0 30 8 * * MON-FRI` | `MarketStateScheduler` | 코스피 MA20 → 시장 상태 판별 |
+| `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 갱신 |
+| `0 30 8 * * MON-FRI` | `MarketStateScheduler` | ① market-service에서 감시 종목 목록 조회 → watchTickers 갱신<br>② 코스피 MA20 → 시장 상태 판별 |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
 | `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 강제 청산 |
 
@@ -950,8 +1004,10 @@ isTradingDay(date)
 ```java
 // MarketClient
 GET http://localhost:8081/api/stocks/{ticker}/candles?days=60  → List<CandleDto>
-GET http://localhost:8081/api/stocks/{ticker}/price            → StockPriceDto
+GET http://localhost:8081/api/stocks/{ticker}/price            → StockPriceDto (marketWarnCode 포함)
 GET http://localhost:8081/api/index/{code}/candles?days=N      → List<CandleDto> (지수)
+GET http://localhost:8081/internal/screened-tickers            → List<String> (감시 종목 목록)
+//   실패 시 빈 List 반환 → StrategyEngine은 기존 watchTickers(yml) 유지
 
 // OrderClient
 POST http://localhost:8082/api/orders/buy  { ticker, quantity, price } → 성공 true / 실패 false
@@ -1034,10 +1090,11 @@ POST /api/strategy/refresh-market-state
 | order-service | market-service | `/internal/token` | KIS 토큰 위임 |
 | portfolio-service | market-service | `/internal/token` | KIS 토큰 위임 |
 | strategy-service | market-service | `/api/stocks/{ticker}/candles` | 일봉 조회 |
-| strategy-service | market-service | `/api/stocks/{ticker}/price` | 현재가 조회 (LiveCandle) |
+| strategy-service | market-service | `/api/stocks/{ticker}/price` | 현재가 조회 (LiveCandle, 시장경보) |
 | strategy-service | market-service | `/api/index/{code}/candles` | 지수 일봉 (시장 상태 판별) |
+| strategy-service | market-service | `/internal/screened-tickers` | 감시 종목 목록 조회 (08:30 갱신) |
 | strategy-service | order-service | `/api/orders/buy`, `/api/orders/sell` | 주문 위임 |
-| strategy-service | portfolio-service | `/api/portfolio` | 보유 포지션 조회 (리스크 관리) |
+| strategy-service | portfolio-service | `/api/portfolio` | 보유 포지션 조회 (리스크 관리 + BUY 중복 방지) |
 
 ### Kafka 통신
 

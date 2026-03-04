@@ -25,15 +25,26 @@
 시장 상황을 먼저 판별한 뒤 그에 맞는 전략을 자동 선택합니다.
 
 ```
-[매일 08:30] 시장 상태 판별
+[매일 08:20] 감시 종목 목록 갱신 (market-service)
     ↓
-  코스피 종가 > MA20 → BULLISH (상승장)
-  코스피 종가 ≤ MA20 → SIDEWAYS (횡보장)
+  StockScreenerService: stock-universe.json 로드
+  → 코스피200(85개) + 코스닥150(22개) = 107개 종목 캐싱
+
+[매일 08:30] 감시 종목 동적 갱신 + 시장 상태 판별 (strategy-service)
     ↓
+  MarketStateScheduler:
+    ① market-service /internal/screened-tickers → watchTickers 갱신
+    ② 코스피 종가 > MA20 → BULLISH (상승장)
+       코스피 종가 ≤ MA20 → SIDEWAYS (횡보장)
+
 [09:05~15:20 5분 주기] 전략 실행
     ↓
   BULLISH  → 변동성 돌파 + 골든크로스 (동시 실행)
   SIDEWAYS → RSI + 볼린저밴드 통합 전략
+    ↓
+[포지션 사이징 + BUY 가드]
+    → 수량 = floor(50만 원 / 현재가)
+    → ① 시장경보 종목 스킵 → ② 이미 보유 중 스킵 → ③ maxPositions(3) 초과 스킵
     ↓
 [공통 리스크 관리]
     → 트레일링 스탑: 고점 -7% 하락 시 자동 청산
@@ -323,7 +334,8 @@ tradingDaysBetween(Monday, Thursday)  = 3   // 강제 청산!
 
 | Cron | 클래스 | 역할 |
 |------|--------|------|
-| `0 30 8 * * MON-FRI` | `MarketStateScheduler` | 코스피 MA20 계산 → 시장 상태 판별 |
+| `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 캐싱 |
+| `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
 | `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 강제 청산 |
 
@@ -346,11 +358,13 @@ if (hour == 15 && minute > 20) return;
 
 ```yaml
 strategy:
-  watch-tickers:           # 감시 종목 (최대 수십 개, 5~10개 권장)
+  watch-tickers:           # yml fallback (08:30 이전 또는 market-service 응답 실패 시)
     - "005930"             # 삼성전자
     - "000660"             # SK하이닉스
   candle-days: 60          # 역사적 캔들 조회 기간
-  order-quantity: 1        # 1회 주문 수량
+  position-sizing:
+    invest-amount-krw: 500000  # 1회 매수 금액(원). 수량 = floor(금액 / 현재가)
+    max-positions: 3           # 동시에 보유할 수 있는 최대 종목 수 (초과 시 BUY 스킵)
   enabled-strategies:      # 등록된 전략 목록 (시장 상태에 따라 런타임 필터링)
     - golden-cross
     - volatility-breakout
@@ -372,19 +386,23 @@ portfolio-service:
   url: http://localhost:8083
 ```
 
-### 종목 추가
+> `watch-tickers`는 서비스 재시작 직후 또는 `market-service` 응답 실패 시 사용하는 **fallback 목록**입니다.
+> 정상 운영 시 매일 08:30에 `market-service /internal/screened-tickers`로 **코스피200+코스닥150** 전체로 자동 교체됩니다.
 
-`watch-tickers`에 KRX 종목 코드를 추가합니다. 기술적으로 제한 없음 — 실용적으로 5~10개 권장 (종목당 API 호출 2~3회 × 5분 주기 고려).
+### 감시 종목 관리
 
-```yaml
-strategy:
-  watch-tickers:
-    - "005930"   # 삼성전자
-    - "000660"   # SK하이닉스
-    - "035420"   # NAVER
-    - "051910"   # LG화학
-    - "035720"   # 카카오
+감시 종목은 `market-service/src/main/resources/stock-universe.json`에서 관리합니다.
+
+```json
+{
+  "description": "코스피200 + 코스닥150 구성 종목",
+  "lastUpdated": "2026-03-04",
+  "kospi200": ["005930", "000660", "005380", ...],
+  "kosdaq150": ["247540", "086520", "263750", ...]
+}
 ```
+
+KRX는 6월/12월에 지수 구성 종목을 리밸런싱합니다. 변경 시 `stock-universe.json`을 수동 업데이트하고 서비스를 재시작합니다.
 
 ### 전략 활성화/비활성화
 
@@ -416,3 +434,61 @@ strategy:
     enabled: true
     max-holding-days: 5  # 5거래일로 연장
 ```
+
+---
+
+## 10. 포지션 사이징
+
+### 개요
+
+코스피200+코스닥150(107개) 규모의 유니버스에서 여러 종목에 동시 BUY 신호가 발생할 수 있으므로, 예산 초과를 방지하기 위한 포지션 사이징과 중복 매수 방지 로직을 구현합니다.
+
+**예산 구조:** 50만 원 × 최대 3종목 = **최대 150만 원 동시 투자**
+
+### 수량 계산
+
+```
+BUY 수량 = floor(investAmountKrw / 현재가)
+
+예시:
+  삼성전자 75,000원 → floor(500,000 / 75,000) = 6주
+  고가 종목 600,000원 → floor(500,000 / 600,000) = 0주 → BUY 스킵 + Slack 경고
+```
+
+SELL은 수량을 직접 계산하지 않고, portfolio-service에서 실제 보유 수량을 조회하여 **전량 매도**합니다.
+
+### BUY 3단계 가드
+
+| 단계 | 조건 | 처리 |
+|------|------|------|
+| ① 시장경보 | `!priceData.isSafe()` | BUY 스킵 (투자주의/경고/위험 종목 제외) |
+| ② 중복 보유 | `positions.contains(ticker)` | BUY 스킵 (이미 보유 중인 종목 재진입 방지) |
+| ③ 한도 초과 | `positions.size() + boughtThisRun[0] >= maxPositions` | BUY 스킵 (최대 3종목 초과 방지) |
+
+### `boughtThisRun` 카운터
+
+동일 5분 사이클 내에서 여러 종목에 BUY가 발생하는 상황을 처리합니다.
+
+```java
+int[] boughtThisRun = {0};  // 이번 사이클 신규 매수 수
+
+// 종목 순회 중 BUY 성공 시
+boughtThisRun[0]++;
+
+// 다음 종목의 한도 체크 시
+int effective = positions.size() + boughtThisRun[0];
+if (effective >= maxPositions) skip;  // 실시간 카운터로 초과 방지
+```
+
+`positions`는 사이클 시작 시 1회만 조회합니다. 주문 API 응답 지연 등으로 인해 DB 반영 전에 다음 종목 평가가 실행될 수 있으므로, 메모리 카운터로 보완합니다.
+
+### 동작 예시
+
+| 상황 | 처리 |
+|------|------|
+| 보유 1종목, 이번 사이클 0건 → BUY 신호 | effective=1 → 진입 (잔여 2슬롯) |
+| 보유 2종목, 이번 사이클 1건 → BUY 신호 | effective=3 → **스킵** (한도 도달) |
+| 이미 삼성전자 보유 중, 삼성전자 BUY 신호 | **스킵** (중복 보유) |
+| 투자경고 종목 BUY 신호 | **스킵** (시장경보) |
+| SELL 신호, 보유 6주 | portfolio에서 6주 조회 → **6주 전량 매도** |
+| SELL 신호, 보유 없음 | **스킵** |

@@ -12,7 +12,9 @@ strategy:
     - "005930"         # 삼성전자
     - "000660"         # SK하이닉스
   candle-days: 60      # 지표 계산용 캔들 개수
-  order-quantity: 1    # 1회 주문 수량
+  position-sizing:
+    invest-amount-krw: 500000   # 1회 매수 금액(원). 수량 = floor(금액 / 현재가)
+    max-positions: 3            # 동시에 보유할 수 있는 최대 종목 수 (초과 시 BUY 스킵)
   enabled-strategies:  # 전체 등록 (시장 상태에 따라 런타임에 필터링)
     - golden-cross       # 상승장 — 스윙 (며칠~몇 주)
     - volatility-breakout # 상승장 — 당일 매매
