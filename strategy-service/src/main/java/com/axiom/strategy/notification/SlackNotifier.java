@@ -63,7 +63,8 @@ public class SlackNotifier {
      * 서비스 시작 알림.
      */
     public void sendServiceStarted() {
-        String time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String time = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Seoul"))
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         send("🟢 *strategy-service* 시작  (" + time + ")");
     }
 
@@ -71,7 +72,8 @@ public class SlackNotifier {
      * 서비스 종료 알림.
      */
     public void sendServiceStopped() {
-        String time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String time = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Seoul"))
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         send("🔴 *strategy-service* 종료  (" + time + ")");
     }
 

@@ -45,8 +45,12 @@ def now():
     return datetime.now(KST).strftime('%H:%M:%S')
 
 
+_running = True
+
 def _shutdown(signum, frame):
+    global _running
     print('[pod-watcher] 종료 신호 수신, 정상 종료', flush=True)
+    _running = False
     sys.exit(0)
 
 
@@ -56,39 +60,52 @@ def main():
 
     config.load_incluster_config()
     v1 = client.CoreV1Api()
-    w = watch.Watch()
 
     # pod_name → bool (마지막으로 알려진 Ready 상태)
     ready_state: dict[str, bool] = {}
 
-    print(f'[pod-watcher] axiom 네임스페이스 감시 시작', flush=True)
+    print('[pod-watcher] axiom 네임스페이스 감시 시작', flush=True)
 
-    for event in w.stream(v1.list_namespaced_pod, namespace=NAMESPACE):
-        etype = event['type']   # ADDED / MODIFIED / DELETED
-        pod   = event['object']
-        name  = pod.metadata.name
-        app   = app_label(pod)
-        label = FRIENDLY.get(app, app)
+    while _running:
+        try:
+            w = watch.Watch()
+            for event in w.stream(v1.list_namespaced_pod, namespace=NAMESPACE):
+                etype = event['type']   # ADDED / MODIFIED / DELETED
+                pod   = event['object']
+                name  = pod.metadata.name
+                app   = app_label(pod)
+                label = FRIENDLY.get(app, app)
 
-        if app == 'pod-watcher':
-            continue
+                if app == 'pod-watcher':
+                    continue
 
-        if etype == 'DELETED':
-            was_ready = ready_state.pop(name, False)
-            if was_ready:
-                msg = f'🔴 *{label}* 종료  ({now()})'
-                print(msg, flush=True)
-                slack(msg)
-            continue
+                if etype == 'DELETED':
+                    was_ready = ready_state.pop(name, False)
+                    if was_ready:
+                        msg = f'🔴 *{label}* 종료  ({now()})'
+                        print(msg, flush=True)
+                        slack(msg)
+                    continue
 
-        prev = ready_state.get(name, False)
-        curr = is_ready(pod)
-        ready_state[name] = curr
+                curr = is_ready(pod)
 
-        if not prev and curr:
-            msg = f'🟢 *{label}* 시작  ({now()})'
-            print(msg, flush=True)
-            slack(msg)
+                if etype == 'ADDED':
+                    # 재연결 시 기존 Pod 상태를 조용히 초기화 (알림 없음)
+                    ready_state[name] = curr
+                    continue
+
+                # MODIFIED: 실제 상태 변화만 알림
+                prev = ready_state.get(name, False)
+                ready_state[name] = curr
+
+                if not prev and curr:
+                    msg = f'🟢 *{label}* 시작  ({now()})'
+                    print(msg, flush=True)
+                    slack(msg)
+
+        except Exception as e:
+            print(f'[pod-watcher] Watch 스트림 종료: {e} — 5초 후 재연결', flush=True)
+            time.sleep(5)
 
 
 if __name__ == '__main__':

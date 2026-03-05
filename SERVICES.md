@@ -842,6 +842,8 @@ public class AdminConfigStore {
     private volatile boolean paused = false;          // 매매 중단 여부
     private volatile int investAmountKrw;             // 1회 매수 금액 (원)
     private volatile int maxPositions;                // 최대 동시 보유 종목 수
+    private volatile double trailingStopPct;          // 트레일링 스탑 하락 허용 폭 (%)
+    private volatile int timeCutDays;                 // 타임 컷 최대 보유 거래일
 
     @PostConstruct
     void init() {
@@ -851,7 +853,8 @@ public class AdminConfigStore {
 
     // 설정 변경 시 admin-config.json에 자동 저장
     public void setPaused(boolean paused)  { this.paused = paused; saveToFile(); }
-    public void setConfig(int investAmountKrw, int maxPositions) { ...; saveToFile(); }
+    public void setConfig(int investAmountKrw, int maxPositions,
+                          double trailingStopPct, int timeCutDays) { ...; saveToFile(); }
 }
 ```
 
@@ -863,10 +866,10 @@ public class AdminConfigStore {
 ### `AdminController.java`
 
 ```java
-GET  /api/strategy/admin/status  → AdminStatusDto { paused, investAmountKrw, maxPositions }
+GET  /api/strategy/admin/status  → AdminStatusDto { paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays }
 POST /api/strategy/admin/pause   → paused=true, 현재 상태 반환
 POST /api/strategy/admin/resume  → paused=false, 현재 상태 반환
-PATCH /api/strategy/admin/config → AdminConfigDto { investAmountKrw?, maxPositions? }
+PATCH /api/strategy/admin/config → AdminConfigDto { investAmountKrw?, maxPositions?, trailingStopPct?, timeCutDays? }
                                    null 필드는 기존 값 유지 (partial update)
 ```
 
@@ -1156,10 +1159,10 @@ POST /api/strategy/refresh-market-state
 | POST | `/api/strategy/test-slack` | Slack 알림 연결 테스트 |
 | GET | `/api/strategy/market-state` | 현재 시장 상태 조회 |
 | POST | `/api/strategy/refresh-market-state` | 시장 상태 수동 갱신 |
-| GET | `/api/strategy/admin/status` | 관리자 설정 조회 (paused, investAmountKrw, maxPositions) |
+| GET | `/api/strategy/admin/status` | 관리자 설정 조회 (paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays) |
 | POST | `/api/strategy/admin/pause` | 매매 긴급 정지 |
 | POST | `/api/strategy/admin/resume` | 매매 재개 |
-| PATCH | `/api/strategy/admin/config` | 투자 설정 변경 (부분 업데이트 지원) |
+| PATCH | `/api/strategy/admin/config` | 투자·리스크 설정 변경 (부분 업데이트 지원) |
 
 ---
 

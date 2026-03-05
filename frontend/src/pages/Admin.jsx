@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getAdminStatus, pauseTrading, resumeTrading, updateAdminConfig } from '../api/stockApi'
 
-export default function Admin({ onClose }) {
+export default function Admin({ onClose, onConfigUpdated }) {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -12,6 +12,8 @@ export default function Admin({ onClose }) {
 
   const [investInput, setInvestInput] = useState('')
   const [maxPosInput, setMaxPosInput] = useState('')
+  const [trailingInput, setTrailingInput] = useState('')
+  const [timeCutInput, setTimeCutInput] = useState('')
 
   useEffect(() => {
     getAdminStatus()
@@ -19,6 +21,8 @@ export default function Admin({ onClose }) {
         setStatus(s)
         setInvestInput(String(s.investAmountKrw))
         setMaxPosInput(String(s.maxPositions))
+        setTrailingInput(String(s.trailingStopPct))
+        setTimeCutInput(String(s.timeCutDays))
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -38,18 +42,27 @@ export default function Admin({ onClose }) {
   }
 
   const handleSaveConfig = async () => {
-    const invest = parseInt(investInput, 10)
-    const maxPos = parseInt(maxPosInput, 10)
-    if (isNaN(invest) || invest < 1 || isNaN(maxPos) || maxPos < 1) {
+    const invest   = parseInt(investInput, 10)
+    const maxPos   = parseInt(maxPosInput, 10)
+    const trailing = parseFloat(trailingInput)
+    const timeCut  = parseInt(timeCutInput, 10)
+    if (isNaN(invest) || invest < 1 || isNaN(maxPos) || maxPos < 1
+        || isNaN(trailing) || trailing <= 0 || isNaN(timeCut) || timeCut < 1) {
       setSaveMsg({ ok: false, text: '올바른 숫자를 입력하세요' })
       return
     }
     setSaving(true)
     setSaveMsg(null)
     try {
-      const res = await updateAdminConfig({ investAmountKrw: invest, maxPositions: maxPos })
+      const res = await updateAdminConfig({
+        investAmountKrw: invest,
+        maxPositions: maxPos,
+        trailingStopPct: trailing,
+        timeCutDays: timeCut,
+      })
       setStatus(res)
       setSaveMsg({ ok: true, text: '설정이 저장되었습니다' })
+      onConfigUpdated?.(res)
     } catch (e) {
       setSaveMsg({ ok: false, text: '저장 실패: ' + e.message })
     } finally {
@@ -118,6 +131,29 @@ export default function Admin({ onClose }) {
                     max="20"
                   />
                 </label>
+                <label className="admin-field">
+                  <span className="admin-field-label">트레일링 스탑 (%)</span>
+                  <input
+                    type="number"
+                    className="admin-input"
+                    value={trailingInput}
+                    onChange={e => setTrailingInput(e.target.value)}
+                    min="0.1"
+                    max="30"
+                    step="0.1"
+                  />
+                </label>
+                <label className="admin-field">
+                  <span className="admin-field-label">타임 컷 (거래일)</span>
+                  <input
+                    type="number"
+                    className="admin-input"
+                    value={timeCutInput}
+                    onChange={e => setTimeCutInput(e.target.value)}
+                    min="1"
+                    max="30"
+                  />
+                </label>
               </div>
               <button
                 className="admin-save-btn"
@@ -135,8 +171,6 @@ export default function Admin({ onClose }) {
             <div className="admin-section admin-future">
               <h3 className="admin-section-title">향후 추가 예정</h3>
               <ul className="admin-future-list">
-                <li>트레일링 스탑 % 조정</li>
-                <li>타임 컷 일수 조정</li>
                 <li>전략별 ON/OFF</li>
                 <li>감시 종목 관리</li>
               </ul>

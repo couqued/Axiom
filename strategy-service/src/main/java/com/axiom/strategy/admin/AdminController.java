@@ -1,6 +1,5 @@
 package com.axiom.strategy.admin;
 
-import com.axiom.strategy.config.StrategyConfig;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -11,7 +10,6 @@ import org.springframework.web.bind.annotation.*;
 public class AdminController {
 
     private final AdminConfigStore adminConfigStore;
-    private final StrategyConfig strategyConfig;
 
     /** 현재 관리자 설정 상태 조회 */
     @GetMapping("/status")
@@ -36,9 +34,11 @@ public class AdminController {
     /** 투자 설정 변경 (부분 업데이트 허용) */
     @PatchMapping("/config")
     public ResponseEntity<AdminStatusDto> updateConfig(@RequestBody AdminConfigDto dto) {
-        int newInvest      = dto.investAmountKrw() != null ? dto.investAmountKrw() : adminConfigStore.getInvestAmountKrw();
-        int newMaxPos      = dto.maxPositions()    != null ? dto.maxPositions()    : adminConfigStore.getMaxPositions();
-        adminConfigStore.setConfig(newInvest, newMaxPos);
+        int    newInvest   = dto.investAmountKrw() != null ? dto.investAmountKrw() : adminConfigStore.getInvestAmountKrw();
+        int    newMaxPos   = dto.maxPositions()    != null ? dto.maxPositions()    : adminConfigStore.getMaxPositions();
+        double newTsStop   = dto.trailingStopPct() != null ? dto.trailingStopPct() : adminConfigStore.getTrailingStopPct();
+        int    newTimeCut  = dto.timeCutDays()     != null ? dto.timeCutDays()     : adminConfigStore.getTimeCutDays();
+        adminConfigStore.setConfig(newInvest, newMaxPos, newTsStop, newTimeCut);
         return ResponseEntity.ok(currentStatus());
     }
 
@@ -47,8 +47,8 @@ public class AdminController {
                 adminConfigStore.isPaused(),
                 adminConfigStore.getInvestAmountKrw(),
                 adminConfigStore.getMaxPositions(),
-                strategyConfig.getTrailingStop().getStopPercent(),
-                strategyConfig.getTimeCut().getMaxHoldingDays()
+                adminConfigStore.getTrailingStopPct(),
+                adminConfigStore.getTimeCutDays()
         );
     }
 }

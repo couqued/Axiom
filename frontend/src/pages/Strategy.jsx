@@ -6,7 +6,7 @@ const STRATEGIES_BY_STATE = {
   SIDEWAYS: ['RSI + 볼린저밴드'],
 }
 
-export default function Strategy() {
+export default function Strategy({ liveAdminConfig }) {
   const [marketState, setMarketState] = useState(null)
   const [positions, setPositions] = useState([])
   const [adminConfig, setAdminConfig] = useState(null)
@@ -20,11 +20,17 @@ export default function Strategy() {
   const [slackMsg, setSlackMsg] = useState(null)
 
   useEffect(() => {
+    setLoading(true)
     Promise.all([getMarketState(), getPortfolio(), getAdminStatus()])
       .then(([ms, p, cfg]) => { setMarketState(ms.state); setPositions(p); setAdminConfig(cfg) })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  // Admin에서 저장 시 API 재조회 없이 즉시 반영
+  useEffect(() => {
+    if (liveAdminConfig) setAdminConfig(liveAdminConfig)
+  }, [liveAdminConfig])
 
   const handleRefresh = async () => {
     setRefreshing(true)

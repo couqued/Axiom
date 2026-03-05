@@ -1,5 +1,6 @@
 package com.axiom.strategy.service;
 
+import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
@@ -30,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TimeCutService {
 
     private final StrategyConfig strategyConfig;
+    private final AdminConfigStore adminConfigStore;
     private final OrderClient orderClient;
     private final SlackNotifier slackNotifier;
 
@@ -83,7 +85,7 @@ public class TimeCutService {
         }
 
         int elapsed = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now());
-        int maxDays  = config.getMaxHoldingDays();
+        int maxDays  = adminConfigStore.getTimeCutDays();
 
         if (elapsed >= maxDays) {
             log.warn("[TimeCut] 타임 컷 발동 — {} | 매수일: {} | 경과 거래일: {}일 ≥ {}일",

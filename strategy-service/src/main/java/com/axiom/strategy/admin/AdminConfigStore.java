@@ -22,6 +22,8 @@ public class AdminConfigStore {
     private volatile boolean paused = false;
     private volatile int investAmountKrw;
     private volatile int maxPositions;
+    private volatile double trailingStopPct;
+    private volatile int timeCutDays;
 
     @Value("${admin.config-path:admin-config.json}")
     private String configFilePath;
@@ -30,30 +32,38 @@ public class AdminConfigStore {
     void init() {
         investAmountKrw = strategyConfig.getPositionSizing().getInvestAmountKrw();
         maxPositions    = strategyConfig.getPositionSizing().getMaxPositions();
+        trailingStopPct = strategyConfig.getTrailingStop().getStopPercent();
+        timeCutDays     = strategyConfig.getTimeCut().getMaxHoldingDays();
         loadFromFile();
     }
 
-    public boolean isPaused()        { return paused; }
-    public int getInvestAmountKrw()  { return investAmountKrw; }
-    public int getMaxPositions()     { return maxPositions; }
+    public boolean isPaused()          { return paused; }
+    public int getInvestAmountKrw()    { return investAmountKrw; }
+    public int getMaxPositions()       { return maxPositions; }
+    public double getTrailingStopPct() { return trailingStopPct; }
+    public int getTimeCutDays()        { return timeCutDays; }
 
     public void setPaused(boolean paused) {
         this.paused = paused;
         saveToFile();
     }
 
-    public void setConfig(int investAmountKrw, int maxPositions) {
+    public void setConfig(int investAmountKrw, int maxPositions,
+                          double trailingStopPct, int timeCutDays) {
         this.investAmountKrw = investAmountKrw;
         this.maxPositions    = maxPositions;
+        this.trailingStopPct = trailingStopPct;
+        this.timeCutDays     = timeCutDays;
         saveToFile();
     }
 
     private void saveToFile() {
         try {
-            Snapshot snapshot = new Snapshot(paused, investAmountKrw, maxPositions);
+            Snapshot snapshot = new Snapshot(paused, investAmountKrw, maxPositions,
+                    trailingStopPct, timeCutDays);
             objectMapper.writeValue(new File(configFilePath), snapshot);
-            log.info("[AdminConfig] 설정 저장 — paused={}, investAmountKrw={}, maxPositions={}",
-                    paused, investAmountKrw, maxPositions);
+            log.info("[AdminConfig] 설정 저장 — paused={}, investAmountKrw={}, maxPositions={}, trailingStopPct={}, timeCutDays={}",
+                    paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays);
         } catch (IOException e) {
             log.error("[AdminConfig] 설정 저장 실패: {}", e.getMessage());
         }
@@ -67,12 +77,15 @@ public class AdminConfigStore {
             this.paused          = snapshot.paused();
             this.investAmountKrw = snapshot.investAmountKrw();
             this.maxPositions    = snapshot.maxPositions();
-            log.info("[AdminConfig] 설정 로드 — paused={}, investAmountKrw={}, maxPositions={}",
-                    paused, investAmountKrw, maxPositions);
+            this.trailingStopPct = snapshot.trailingStopPct();
+            this.timeCutDays     = snapshot.timeCutDays();
+            log.info("[AdminConfig] 설정 로드 — paused={}, investAmountKrw={}, maxPositions={}, trailingStopPct={}, timeCutDays={}",
+                    paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays);
         } catch (IOException e) {
             log.warn("[AdminConfig] 설정 로드 실패 (기본값 사용): {}", e.getMessage());
         }
     }
 
-    public record Snapshot(boolean paused, int investAmountKrw, int maxPositions) {}
+    public record Snapshot(boolean paused, int investAmountKrw, int maxPositions,
+                           double trailingStopPct, int timeCutDays) {}
 }

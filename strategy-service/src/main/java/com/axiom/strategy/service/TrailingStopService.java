@@ -1,5 +1,6 @@
 package com.axiom.strategy.service;
 
+import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
@@ -30,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TrailingStopService {
 
     private final StrategyConfig strategyConfig;
+    private final AdminConfigStore adminConfigStore;
     private final OrderClient orderClient;
     private final SlackNotifier slackNotifier;
 
@@ -61,7 +63,7 @@ public class TrailingStopService {
                 cur.compareTo(old) > 0 ? cur : old);
 
         // 트레일링 스탑 기준가 = 고점 × (1 - stopPercent / 100)
-        double stopPercent = config.getStopPercent();
+        double stopPercent = adminConfigStore.getTrailingStopPct();
         BigDecimal stopPrice = peak.multiply(BigDecimal.valueOf(1.0 - stopPercent / 100.0))
                 .setScale(0, RoundingMode.HALF_UP);
 

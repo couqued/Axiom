@@ -259,7 +259,8 @@ RSI = 100 - (100 / (1 + RS))
 | 항목 | 값 |
 |------|-----|
 | 클래스 | `TrailingStopService` |
-| 설정 | `strategy.trailing-stop.stop-percent: 7.0` |
+| 설정 | `AdminConfigStore.trailingStopPct` (런타임 변경 가능) |
+| 기본값 | `strategy.trailing-stop.stop-percent: 7.0` (yml → AdminConfigStore 초기화) |
 | 적용 범위 | 모든 보유 종목 |
 | 실행 시점 | StrategyEngine.run() 내 (5분 주기) |
 
@@ -295,7 +296,8 @@ stopPrice = peakPrice × (1 - 7/100)   ← 청산 기준가
 | 항목 | 값 |
 |------|-----|
 | 클래스 | `TimeCutService` |
-| 설정 | `strategy.time-cut.max-holding-days: 3` |
+| 설정 | `AdminConfigStore.timeCutDays` (런타임 변경 가능) |
+| 기본값 | `strategy.time-cut.max-holding-days: 3` (yml → AdminConfigStore 초기화) |
 | 적용 전략 | `rsi-bollinger` (applicable-strategies 목록) |
 | 실행 시점 | StrategyEngine.run() 내 (5분 주기) |
 
@@ -367,17 +369,38 @@ POST http://localhost:8084/api/strategy/admin/resume
 
 # 투자 설정 변경 (null 필드는 기존 값 유지)
 PATCH http://localhost:8084/api/strategy/admin/config
-{ "investAmountKrw": 300000, "maxPositions": 2 }
+{
+  "investAmountKrw": 300000,
+  "maxPositions": 2,
+  "trailingStopPct": 5.0,
+  "timeCutDays": 5
+}
 
 # 현재 설정 조회
 GET http://localhost:8084/api/strategy/admin/status
-→ { "paused": false, "investAmountKrw": 500000, "maxPositions": 3 }
+→ {
+    "paused": false,
+    "investAmountKrw": 500000,
+    "maxPositions": 3,
+    "trailingStopPct": 7.0,
+    "timeCutDays": 3
+  }
 ```
 
 설정은 `admin-config.json`에 자동 저장되어 서비스 재시작 후에도 유지됩니다.
-파일이 없으면 `application.yml`의 `position-sizing` 기본값을 사용합니다.
+파일이 없으면 `application.yml`의 기본값으로 초기화됩니다.
 
-> **우선순위:** `admin-config.json` > `application.yml` `position-sizing` 값
+> **우선순위:** `admin-config.json` > `application.yml` 기본값
+
+### AdminConfigStore 관리 항목
+
+| 항목 | 필드 | yml 기본값 | 적용 시점 |
+|------|------|-----------|----------|
+| 1회 매수금액 | `investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
+| 최대 보유 종목 수 | `maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
+| 트레일링 스탑 % | `trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
+| 타임 컷 거래일 | `timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
+| 매매 중단 여부 | `paused` | `false` | 즉시 |
 
 ### application.yml 전체 예시
 
@@ -448,6 +471,17 @@ strategy:
 ```
 
 ### 리스크 관리 조정
+
+런타임 변경 (재시작 불필요, 다음 5분 사이클 즉시 반영):
+
+```bash
+PATCH http://localhost:8084/api/strategy/admin/config
+{ "trailingStopPct": 5.0, "timeCutDays": 5 }
+```
+
+또는 관리자 패널(⚙️)의 "투자 설정" 섹션에서 직접 입력.
+
+yml 기본값 변경 (서비스 재시작 필요, admin-config.json 없을 때만 적용):
 
 ```yaml
 strategy:

@@ -18,6 +18,7 @@ const TABS = [
 function App() {
   const [tab, setTab] = useState('dashboard')
   const [adminOpen, setAdminOpen] = useState(false)
+  const [liveAdminConfig, setLiveAdminConfig] = useState(null)
 
   return (
     <div className="app">
@@ -25,14 +26,19 @@ function App() {
         <h1>Axiom Automated Trade</h1>
         <button className="admin-btn" onClick={() => setAdminOpen(true)}>⚙️</button>
       </header>
-      {adminOpen && <Admin onClose={() => setAdminOpen(false)} />}
+      {adminOpen && (
+        <Admin
+          onClose={() => setAdminOpen(false)}
+          onConfigUpdated={setLiveAdminConfig}
+        />
+      )}
 
       <main className="app-content">
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'search' && <StockSearch />}
         {tab === 'order' && <OrderForm />}
         {tab === 'history' && <TradeHistory />}
-        {tab === 'strategy' && <Strategy />}
+        {tab === 'strategy' && <Strategy liveAdminConfig={liveAdminConfig} />}
       </main>
 
       <nav className="bottom-nav">
