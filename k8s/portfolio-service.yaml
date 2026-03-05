@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portfolio-service
+  namespace: axiom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portfolio-service
+  template:
+    metadata:
+      labels:
+        app: portfolio-service
+    spec:
+      containers:
+        - name: portfolio-service
+          image: axiom/portfolio-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-secrets
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 60
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portfolio-service
+  namespace: axiom
+spec:
+  selector:
+    app: portfolio-service
+  ports:
+    - port: 8083
+      targetPort: 8083

@@ -33,17 +33,17 @@ strategy:
       - rsi-bollinger
 
 market-service:
-  url: http://localhost:8081
+  url: ${MARKET_SERVICE_URL:http://localhost:8081}
 
 order-service:
-  url: http://localhost:8082
+  url: ${ORDER_SERVICE_URL:http://localhost:8082}
 
 portfolio-service:
-  url: http://localhost:8083
+  url: ${PORTFOLIO_SERVICE_URL:http://localhost:8083}
 
 slack:
-  webhook-url: PLACEHOLDER   # application-secret.yml에서 실제 URL로 오버라이드
-  enabled: false             # true로 변경 시 실제 Slack 알림 발송
+  webhook-url: ${SLACK_WEBHOOK_URL:PLACEHOLDER}   # application-secret.yml 또는 env var로 오버라이드
+  enabled: ${SLACK_ENABLED:false}
 
 management:
   endpoints:

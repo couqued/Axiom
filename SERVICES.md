@@ -22,16 +22,21 @@
 
 ### 서버 구성
 
-| 서비스 | 포트 | 내장 서버 | DB | Kafka |
-|--------|------|-----------|----|-------|
-| api-gateway | 8080 | Netty (비동기) | 없음 | 없음 |
-| market-service | 8081 | Tomcat | market 스키마 | 없음 |
-| order-service | 8082 | Tomcat | orders 스키마 | Producer |
-| portfolio-service | 8083 | Tomcat | portfolio 스키마 | Consumer |
-| strategy-service | 8084 | Tomcat | 없음 | 없음 |
-| frontend (Vite dev) | 5173 | Node.js | 없음 | 없음 |
+| 서비스 | 포트 (K8s) | 포트 (로컬) | 내장 서버 | DB | Kafka | K8s 타입 |
+|--------|-----------|-----------|-----------|----|----|---------|
+| api-gateway | 8080 | 8080 | Netty (비동기) | 없음 | 없음 | LoadBalancer |
+| market-service | 8081 | 8081 | Tomcat | market 스키마 | 없음 | ClusterIP |
+| order-service | 8082 | 8082 | Tomcat | orders 스키마 | Producer | ClusterIP |
+| portfolio-service | 8083 | 8083 | Tomcat | portfolio 스키마 | Consumer | ClusterIP |
+| strategy-service | 8084 | 8084 | Tomcat | 없음 | 없음 | ClusterIP |
+| frontend | 80 | 5173 | nginx (K8s) / Node.js (Dev) | 없음 | 없음 | LoadBalancer |
+| pod-watcher | — | — | Python 3.12 | 없음 | 없음 | Deployment |
+| PostgreSQL | 5432 | 5432 | — | axiom DB | 없음 | StatefulSet |
+| Kafka | 9092 | 9092 | — | — | Broker | StatefulSet |
+| Zookeeper | 2181 | 2181 | — | — | — | StatefulSet |
 
 > api-gateway만 Netty인 이유: Spring Cloud Gateway는 내부적으로 Spring WebFlux(리액티브) 기반이라 Tomcat 대신 Netty가 자동 사용됨.
+> K8s LoadBalancer: Docker Desktop이 localhost로 자동 포트 포워딩. ClusterIP: 클러스터 내부에서만 접근 가능.
 
 ### 클라이언트 진입점
 
@@ -1275,3 +1280,109 @@ void preUpdate() {
 | `@AllArgsConstructor` | @Builder와 함께 사용 |
 | `@RequiredArgsConstructor` | final 필드 DI (Service, Controller) |
 | `@Slf4j` | log.info(), log.error() 사용 |
+
+---
+
+## 9. K8s 네트워크 구조 — 프론트엔드 API 호출 흐름
+
+### 문제: CORS (Cross-Origin Resource Sharing)
+
+K8s 배포 후 Admin 패널의 "설정 저장"(PATCH 요청)이 실패하는 문제가 발생했습니다.
+
+**원인:**
+
+브라우저는 요청의 **출처(Origin)** 를 `프로토콜 + 호스트 + 포트`로 판단합니다.
+
+```
+프론트엔드 주소:  http://localhost:80    (K8s LoadBalancer)
+api-gateway 주소: http://localhost:8080  (K8s LoadBalancer)
+                              ↑ 포트가 다름 → 다른 Origin → Cross-Origin 요청
+```
+
+기존 `stockApi.js` 코드:
+```javascript
+const GATEWAY = 'http://localhost:8080'     // 절대 URL 하드코딩
+const res = await fetch(GATEWAY + url, ...) // Cross-Origin 요청 발생
+```
+
+**CORS Preflight란?**
+
+브라우저는 `GET`/`POST` 같은 단순 요청과 달리, `PATCH`/`PUT`/`DELETE` 또는 커스텀 헤더가 포함된 요청 전에 **Preflight** 라는 사전 확인 요청을 먼저 보냅니다.
+
+```
+브라우저 → api-gateway: OPTIONS /api/strategy/admin/config
+           (Preflight: "이 출처에서 PATCH 메서드 보내도 돼?")
+api-gateway → 브라우저: 응답 헤더 확인
+           Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+           ← PATCH가 없음 → 브라우저가 실제 요청 차단
+```
+
+api-gateway의 CORS 설정에 `PATCH`가 없었고, 그 전에 이미 Cross-Origin 자체가 문제였습니다.
+
+---
+
+### 해결: 상대 경로 + 프록시
+
+**핵심 원리:** 브라우저가 같은 Origin으로 요청을 보내면 CORS Preflight 자체가 발생하지 않습니다.
+
+#### K8s 환경 (nginx 프록시)
+
+```
+브라우저 → frontend nginx (http://localhost)
+             PATCH /api/strategy/admin/config
+             ↓ (같은 Origin, CORS 없음)
+             nginx.conf: location /api/ → proxy_pass http://api-gateway:8080
+             ↓ (K8s 클러스터 내부 DNS, 서비스 간 통신)
+             api-gateway → strategy-service
+```
+
+`frontend/nginx.conf`:
+```nginx
+location /api/ {
+    proxy_pass http://api-gateway:8080;  # 클러스터 내부 DNS
+}
+```
+
+브라우저 입장에서는 `http://localhost/api/...`로 요청하므로 Origin이 동일합니다. nginx가 내부적으로 api-gateway로 전달합니다.
+
+#### 로컬 개발 환경 (Vite proxy)
+
+```
+브라우저 → Vite dev server (http://localhost:5173)
+             PATCH /api/strategy/admin/config
+             ↓ (같은 Origin, CORS 없음)
+             vite.config.js server.proxy: /api → http://localhost:8080
+             ↓
+             api-gateway(8080) → strategy-service(8084)
+```
+
+`vite.config.js`:
+```javascript
+server: {
+  proxy: {
+    '/api': 'http://localhost:8080',  // Vite가 프록시 역할
+  },
+},
+```
+
+#### 수정 내용 (`stockApi.js`)
+
+```javascript
+// Before (절대 URL → Cross-Origin)
+const GATEWAY = 'http://localhost:8080'
+const res = await fetch(GATEWAY + url, { ... })
+
+// After (상대 경로 → Same-Origin)
+const res = await fetch(url, { ... })
+// url은 이미 '/api/...' 형태이므로 현재 Origin 기준으로 요청됨
+```
+
+---
+
+### 정리
+
+| 환경 | 브라우저 Origin | API 요청 경로 | 프록시 | CORS |
+|------|--------------|------------|--------|------|
+| K8s | `http://localhost` (port 80) | `/api/...` → nginx | nginx → api-gateway:8080 (클러스터 내부) | 없음 ✅ |
+| 로컬 개발 | `http://localhost:5173` | `/api/...` → Vite | Vite → localhost:8080 | 없음 ✅ |
+| 수정 전 (K8s) | `http://localhost` (port 80) | `http://localhost:8080/api/...` (절대 URL) | 없음 | 발생 ❌ |

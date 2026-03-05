@@ -7,9 +7,9 @@ spring:
   config:
     import: optional:classpath:application-secret.yml
   datasource:
-    url: jdbc:postgresql://localhost:5432/axiom?currentSchema=portfolio
-    username: axiom
-    password: axiom1234
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/axiom?currentSchema=portfolio
+    username: ${DB_USERNAME:axiom}
+    password: ${DB_PASSWORD:axiom1234}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -19,7 +19,7 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         default_schema: portfolio
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: portfolio-service
       auto-offset-reset: earliest
@@ -32,21 +32,21 @@ kis:
   mode: paper   # mock | paper | real
   paper:
     base-url: https://openapivts.koreainvestment.com:29443
-    app-key: PLACEHOLDER
-    app-secret: PLACEHOLDER
-    account-no: PLACEHOLDER
+    app-key: ${KIS_PAPER_APP_KEY:PLACEHOLDER}
+    app-secret: ${KIS_PAPER_APP_SECRET:PLACEHOLDER}
+    account-no: ${KIS_PAPER_ACCOUNT_NO:PLACEHOLDER}
   real:
     base-url: https://openapi.koreainvestment.com:9443
-    app-key: PLACEHOLDER
-    app-secret: PLACEHOLDER
-    account-no: PLACEHOLDER
+    app-key: ${KIS_REAL_APP_KEY:PLACEHOLDER}
+    app-secret: ${KIS_REAL_APP_SECRET:PLACEHOLDER}
+    account-no: ${KIS_REAL_ACCOUNT_NO:PLACEHOLDER}
 
 market-service:
-  url: http://localhost:8081
+  url: ${MARKET_SERVICE_URL:http://localhost:8081}
 
 slack:
-  webhook-url: PLACEHOLDER
-  enabled: false
+  webhook-url: ${SLACK_WEBHOOK_URL:PLACEHOLDER}
+  enabled: ${SLACK_ENABLED:false}
 
 management:
   endpoints:

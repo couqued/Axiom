@@ -22,30 +22,30 @@ spring:
             allowCredentials: true
       routes:
         - id: market-service
-          uri: http://localhost:8081
+          uri: ${MARKET_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/market/**
           filters:
             - RewritePath=/api/market/(?<segment>.*), /api/${segment}
 
         - id: order-service
-          uri: http://localhost:8082
+          uri: ${ORDER_SERVICE_URL:http://localhost:8082}
           predicates:
             - Path=/api/orders/**
 
         - id: portfolio-service
-          uri: http://localhost:8083
+          uri: ${PORTFOLIO_SERVICE_URL:http://localhost:8083}
           predicates:
             - Path=/api/portfolio/**
 
         - id: strategy-service
-          uri: http://localhost:8084
+          uri: ${STRATEGY_SERVICE_URL:http://localhost:8084}
           predicates:
             - Path=/api/strategy/**
 
 slack:
-  webhook-url: PLACEHOLDER
-  enabled: false
+  webhook-url: ${SLACK_WEBHOOK_URL:PLACEHOLDER}
+  enabled: ${SLACK_ENABLED:false}
 
 management:
   endpoints:

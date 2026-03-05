@@ -46,7 +46,10 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 | 외부 API | KIS (한국투자증권) OpenAPI |
 | Frontend | React 19, Vite 7 |
 | PWA | Web App Manifest |
-| 인프라 | Docker, Docker Compose |
+| 인프라 | Docker, Kubernetes (Docker Desktop 내장 K8s) |
+| 컨테이너 런타임 | Docker (멀티스테이지 빌드 × 6) |
+| 웹서버 | nginx (프론트엔드 SPA + API 프록시) |
+| Pod 모니터링 | Python kubernetes 클라이언트 (pod-watcher) |
 | 원격 접속 | Tailscale VPN (권장) |
 
 ---
@@ -56,7 +59,7 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 ```
 ┌─────────────────────────────────────────┐
 │         스마트폰 / PC 브라우저            │
-│         React PWA (port 5173)           │
+│   React PWA (K8s: port 80 / Dev: 5173)  │
 └──────────────────┬──────────────────────┘
                    │ HTTP
                    ▼
@@ -92,11 +95,18 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 └─────────────────────────┘
 
 ┌──────────────────────────────┐
-│   PostgreSQL (Docker)        │
-│   port 5432                  │
+│   PostgreSQL                 │
+│   K8s: StatefulSet :5432     │
+│   Dev: Docker Compose :5432  │
 │   schemas: orders,           │
 │            portfolio,        │
 │            market            │
+└──────────────────────────────┘
+
+┌──────────────────────────────┐
+│   pod-watcher (K8s 전용)     │
+│   K8s Watch API 구독         │
+│   → 모든 Pod 시작/종료 Slack │
 └──────────────────────────────┘
 ```
 
@@ -114,9 +124,41 @@ MSA based Backend + React PWA Frontend used Stock Auto Trade Project
 ```
 axiom/
 ├── README.md                          # 이 문서
-├── docker-compose.yml                 # 로컬 인프라 (PostgreSQL + Kafka)
+├── SERVICES.md                        # 서비스별 기술 상세
+├── STRATEGIES.md                      # 전략 알고리즘 상세
+├── docker-compose.yml                 # 로컬 개발 인프라 (PostgreSQL + Kafka)
 ├── init-db.sql                        # DB 스키마 초기화 (orders, portfolio)
 ├── settings.gradle                    # Gradle 멀티 프로젝트 루트
+│
+├── Dockerfile.api-gateway             # 멀티스테이지 빌드 (JDK21 → JRE21)
+├── Dockerfile.market-service
+├── Dockerfile.order-service
+├── Dockerfile.portfolio-service
+├── Dockerfile.strategy-service
+├── Dockerfile.frontend                # 멀티스테이지 빌드 (Node20 → nginx)
+│
+├── k8s/                               # Kubernetes 매니페스트
+│   ├── MONITORING.md                  # Pod 모니터링 / Slack 알림 구조 문서
+│   ├── namespace.yaml                 # axiom 네임스페이스
+│   ├── configmap.yaml                 # 서비스 URL, DB 호스트, Kafka 설정
+│   ├── secrets.yaml.template          # 시크릿 플레이스홀더 (커밋용)
+│   ├── infra/
+│   │   ├── kafka.yaml                 # Zookeeper + Kafka StatefulSet
+│   │   └── postgres.yaml              # PostgreSQL StatefulSet + PVC
+│   ├── api-gateway.yaml               # Deployment + LoadBalancer (:8080)
+│   ├── market-service.yaml
+│   ├── order-service.yaml
+│   ├── portfolio-service.yaml
+│   ├── strategy-service.yaml          # Deployment + PVC (admin-config.json)
+│   ├── frontend.yaml                  # Deployment + LoadBalancer (:80)
+│   ├── pod-watcher/                   # Pod 상태 모니터링
+│   │   ├── watcher.py                 # Watch API 구독 + Slack 알림
+│   │   ├── requirements.txt
+│   │   ├── Dockerfile
+│   │   ├── rbac.yaml                  # ServiceAccount + Role + RoleBinding
+│   │   └── deployment.yaml
+│   ├── build-images.sh                # 전체 Docker 이미지 빌드
+│   └── deploy.sh                      # K8s 전체 배포 스크립트
 │
 ├── api-gateway/                       # Spring Cloud Gateway (port 8080)
 │   ├── build.gradle
@@ -225,7 +267,9 @@ axiom/
 │           ├── PortfolioItemDto.java    # 보유 포지션
 │           └── OrderRequest.java
 │
-└── frontend/                          # React PWA (port 5173)
+└── frontend/                          # React PWA (K8s: port 80 / Dev: port 5173)
+    ├── nginx.conf                     # SPA 라우팅 + /api/ → api-gateway 프록시
+    ├── vite.config.js                 # Vite 설정 + Vite dev 프록시 + Slack 알림
     ├── index.html                     # PWA 메타태그 포함
     ├── public/
     │   └── manifest.json              # PWA 설치 설정
@@ -370,7 +414,7 @@ ForceExitScheduler (매일 15:20)
 
 ---
 
-### frontend (port 5173)
+### frontend (K8s: port 80 / Dev: port 5173)
 
 React 19 + Vite 7 기반 PWA.
 
@@ -379,6 +423,8 @@ React 19 + Vite 7 기반 PWA.
 - **헤더 ⚙️ 버튼** → 관리자 패널 오버레이 (매매 긴급 정지/재개, 투자 설정 변경)
 - max-width 480px → 스마트폰 화면에 최적화
 - PWA manifest → 스마트폰 홈화면에 아이콘으로 설치 가능
+- **K8s**: nginx 컨테이너, `/api/` → api-gateway 프록시 (`nginx.conf`)
+- **로컬 개발**: Vite dev server proxy (`vite.config.js`의 `server.proxy`)로 CORS 없이 api-gateway 호출
 - Vite dev server 기동/종료 시 Slack 알림 발송 (`vite.config.js` + `.env.local`)
 
 ---
@@ -597,12 +643,15 @@ KIS API 키 없이도 전체 기능 테스트 가능.
 
 ### 사전 요구사항
 
-| 항목 | 버전 | 확인 명령 |
-|------|------|----------|
-| Java | 21 이상 | `java -version` |
-| Docker Desktop | 최신 | `docker --version` |
-| Node.js | 18 이상 | `node --version` |
-| npm | 9 이상 | `npm --version` |
+| 항목 | 버전 | 확인 명령 | 용도 |
+|------|------|----------|------|
+| Java | 21 이상 | `java -version` | 로컬 개발 |
+| Docker Desktop | 최신 | `docker --version` | 이미지 빌드 + K8s |
+| Kubernetes | Docker Desktop 내장 활성화 | `kubectl version` | K8s 배포 |
+| Node.js | 18 이상 | `node --version` | 로컬 개발 |
+| npm | 9 이상 | `npm --version` | 로컬 개발 |
+
+> **K8s 활성화**: Docker Desktop → Settings → Kubernetes → Enable Kubernetes 체크
 
 ### 설정 파일 위치
 
@@ -716,6 +765,57 @@ cd D:/project/axiom/frontend && npm run dev
 # http://localhost:5173 에서 확인
 ```
 
+---
+
+### [대안] Kubernetes 배포
+
+로컬 개발 대신 K8s 환경에서 전체 서비스를 실행합니다.
+
+**Step 1: secrets.yaml 준비**
+
+```bash
+cp k8s/secrets.yaml.template k8s/secrets.yaml
+# k8s/secrets.yaml 열어서 <base64> 자리에 실제 값 입력
+# base64 생성: node -e "console.log(Buffer.from('값').toString('base64'))"
+```
+
+**Step 2: Docker 이미지 빌드**
+
+```bash
+# 프로젝트 루트(axiom/)에서 실행
+bash k8s/build-images.sh
+```
+
+**Step 3: K8s 전체 배포**
+
+```bash
+bash k8s/deploy.sh
+```
+
+**배포 순서 (deploy.sh 내부):**
+1. Namespace
+2. Secrets
+3. ConfigMap
+4. 인프라 (Kafka + PostgreSQL) → PostgreSQL 준비 대기
+5. 백엔드 서비스 5개
+6. Frontend
+7. Pod Watcher
+
+**접속 확인:**
+```bash
+kubectl get pods -n axiom          # 모든 Pod Running 확인
+# 프론트엔드:  http://localhost
+# API Gateway: http://localhost:8080
+```
+
+**Pod 로그 확인:**
+```bash
+kubectl logs -n axiom -l app=strategy-service -f
+kubectl logs -n axiom -l app=pod-watcher -f
+```
+
+---
+
 ### Step 5: API 동작 테스트 (curl)
 
 ```bash
@@ -817,6 +917,32 @@ docker-compose down
 ---
 
 
+### Kubernetes 관리 명령어
+
+```bash
+# 전체 Pod 상태 확인
+kubectl get pods -n axiom
+
+# 특정 서비스 로그
+kubectl logs -n axiom -l app=strategy-service -f
+kubectl logs -n axiom -l app=pod-watcher -f
+
+# 서비스 재배포 (이미지 재빌드 후)
+kubectl rollout restart deployment/strategy-service -n axiom
+
+# 설정 변경 (ConfigMap)
+kubectl edit configmap axiom-config -n axiom
+
+# Pod Watcher 이미지 업데이트
+docker build -f k8s/pod-watcher/Dockerfile -t axiom/pod-watcher:latest k8s/pod-watcher/
+kubectl rollout restart deployment/pod-watcher -n axiom
+
+# 전체 삭제 (네임스페이스 삭제로 한번에)
+kubectl delete namespace axiom
+```
+
+---
+
 ## 13. 스마트폰 접속 방법
 
 ### 방법 1: 같은 WiFi (가장 간단)
@@ -912,6 +1038,12 @@ kis:
 - [x] 관리자 패널 (매매 긴급 정지/재개, 투자 설정 변경, admin-config.json 영구 저장)
 - [x] 전략 관리 탭 (시장 상태 카드, 포지션 현황, 수동 실행, Slack 테스트)
 - [x] 서비스 생명주기 Slack 알림 (5개 Spring Boot 서비스 + Vite 프론트엔드 기동/종료)
+- [x] Docker 컨테이너화 (멀티스테이지 빌드 × 6, eclipse-temurin:21 + nginx:alpine)
+- [x] Kubernetes 배포 (Docker Desktop 내장 K8s, StatefulSet/Deployment/PVC/ConfigMap/Secret)
+- [x] 환경변수 외부화 (DB, Kafka, 서비스 URL, KIS 시크릿 → K8s ConfigMap/Secret)
+- [x] Pod Event Watcher (pod-watcher — K8s Watch API로 전체 9개 Pod 상태 Slack 알림)
+- [x] Frontend nginx 프록시 (K8s: /api/ → api-gateway, Dev: Vite proxy)
+- [x] AdminConfigStore 경로 외부화 (`ADMIN_CONFIG_PATH` env var + PVC 마운트)
 
 ### 진행 예정
 - [ ] KIS API 실제 연동 (실계좌 API 키 발급 후)
@@ -937,6 +1069,62 @@ kis:
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
 
 ---
+<details>
+<summary><strong>[v0.5.0] - 2026-03-05</strong> &nbsp;·&nbsp; Docker + Kubernetes 컨테이너화 + Pod Event Watcher</summary>
+
+<br>
+
+#### Added
+- **Docker 멀티스테이지 빌드** (Dockerfile × 6)
+  - 백엔드 5개: `eclipse-temurin:21-jdk-alpine` builder → `eclipse-temurin:21-jre-alpine` runner
+  - 프론트엔드: `node:20-alpine` builder → `nginx:alpine` runner
+  - `frontend/nginx.conf`: SPA 라우팅(`try_files`) + `/api/` → `api-gateway:8080` 프록시
+- **Kubernetes 매니페스트** (`k8s/`)
+  - `namespace.yaml`: `axiom` 네임스페이스
+  - `configmap.yaml`: 서비스 URL, DB 호스트, Kafka 주소, `ADMIN_CONFIG_PATH`, `SLACK_ENABLED`
+  - `secrets.yaml.template`: KIS API 키, DB 패스워드, Slack Webhook URL (base64, gitignore)
+  - `infra/kafka.yaml`: Zookeeper + Kafka StatefulSet, `enableServiceLinks: false`로 K8s 서비스 env var 충돌 방지
+  - `infra/postgres.yaml`: PostgreSQL StatefulSet + PVC(5Gi) + init-db.sql ConfigMap 마운트
+  - 백엔드 5개 Deployment + ClusterIP Service (readiness/liveness probe 포함)
+  - `frontend.yaml`: Deployment + LoadBalancer(:80)
+  - `api-gateway.yaml`: Deployment + LoadBalancer(:8080)
+  - `strategy-service.yaml`: PVC(100Mi) 마운트 → `admin-config.json` 영구 저장
+  - `build-images.sh` / `deploy.sh`: 빌드 및 7단계 배포 자동화 스크립트
+- **Pod Event Watcher** (`k8s/pod-watcher/`)
+  - `watcher.py`: K8s Watch API 구독 → Pod Ready `False → True` 전환 시 🟢, DELETED 시 🔴 Slack 알림
+  - 감시 대상: 전체 9개 Pod (Zookeeper, Kafka, PostgreSQL, 5개 Spring Boot 서비스, Frontend)
+  - 한국 시간(KST, UTC+9) 명시적 적용 (`datetime.now(KST)`)
+  - SIGTERM 핸들러 추가 → Rolling Update 시 `Completed` 정상 종료 (exit code 0)
+  - `rbac.yaml`: ServiceAccount + Role(pods get/list/watch) + RoleBinding — 최소 권한 원칙
+  - `deployment.yaml`: `axiom-secrets`에서 `SLACK_WEBHOOK_URL` 주입
+  - `k8s/MONITORING.md`: As-Is/To-Be 비교, 알림 조건, 아키텍처, RBAC 문서화
+- **Vite dev 프록시** (`vite.config.js`): `server.proxy: {'/api': 'http://localhost:8080'}` 추가 — 로컬 개발 시 CORS 없이 api-gateway 호출
+
+#### Changed
+- **환경변수 외부화** (전체 5개 `application.yml`)
+  - DB: `${DB_HOST:localhost}`, `${DB_USERNAME:axiom}`, `${DB_PASSWORD:axiom1234}`
+  - Kafka: `${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}`
+  - 서비스 URL: `${MARKET_SERVICE_URL:http://localhost:8081}` 등
+  - KIS 시크릿: `${KIS_PAPER_APP_KEY}`, `${KIS_PAPER_APP_SECRET}`, `${KIS_PAPER_ACCOUNT_NO}`
+  - Slack: `${SLACK_WEBHOOK_URL}`, `${SLACK_ENABLED:false}`
+  - 로컬 실행 시 `localhost` 기본값으로 기존 동작 유지
+- **`AdminConfigStore.java`**: `CONFIG_FILE` 상수 → `@Value("${admin.config-path:admin-config.json}")` 외부화. K8s에서 PVC 마운트 경로(`/app/data/admin-config.json`)로 주입.
+- **`stockApi.js`**: 하드코딩된 `const GATEWAY = 'http://localhost:8080'` 제거 → 상대 경로 사용. K8s: nginx가 프록시, 로컬: Vite proxy가 처리.
+- `.gitignore`: `k8s/secrets.yaml` 추가 (실제 시크릿 값 커밋 방지)
+
+#### Fixed
+- **Kafka CrashLoopBackOff** (K8s 환경): K8s가 `kafka` 서비스명으로 `KAFKA_PORT=tcp://...` 환경변수를 자동 주입 → Confluent Kafka 이미지가 잘못된 설정으로 인식 → 크래시. `enableServiceLinks: false`로 해결. 추가로 누락된 `KAFKA_LISTENERS`, `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`, `KAFKA_INTER_BROKER_LISTENER_NAME` 환경변수 설정.
+- **Admin 설정 저장 오류** (K8s 환경): 프론트엔드(port 80)에서 api-gateway(port 8080)로 절대 URL 호출 시 cross-origin PATCH 요청 → CORS preflight 실패. 상대 URL + nginx 프록시로 해결.
+- **pod-watcher `Error` 상태**: Rolling Update 시 구 Pod가 SIGTERM으로 종료되면 exit code 143 → K8s `Error` 표시. SIGTERM 핸들러에서 `sys.exit(0)` 추가 → `Completed` 정상 표시.
+
+#### Notes
+- K8s 배포 시 `k8s/secrets.yaml` 파일을 직접 생성해야 함 (`secrets.yaml.template` 참고)
+- 로컬 개발 방식(`docker-compose + gradlew bootRun`)은 그대로 유지됨
+- Spring Boot `ServiceLifecycleNotifier`는 K8s에서도 동작 (로컬 개발 호환). K8s에서는 pod-watcher와 중복 알림 발생 가능
+- pod-watcher는 `axiom` 네임스페이스만 감시 (RBAC Role 범위)
+
+</details>
+
 <details>
 <summary><strong>[v0.4.0] - 2026-03-05</strong> &nbsp;·&nbsp; 관리자 패널 + 서비스 생명주기 Slack 알림 + 전략 관리 탭</summary>
 

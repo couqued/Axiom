@@ -1,7 +1,5 @@
-const GATEWAY = 'http://localhost:8080'
-
 async function request(url, options = {}) {
-  const res = await fetch(GATEWAY + url, {
+  const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   })

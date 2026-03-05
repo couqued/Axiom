@@ -1,0 +1,9 @@
+FROM eclipse-temurin:21-jdk-alpine AS builder
+WORKDIR /build
+COPY . .
+RUN ./gradlew :strategy-service:bootJar -x test --no-daemon
+
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+COPY --from=builder /build/strategy-service/build/libs/*.jar app.jar
+ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-jar", "app.jar"]

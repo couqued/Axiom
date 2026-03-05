@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-service
+  namespace: axiom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: market-service
+  template:
+    metadata:
+      labels:
+        app: market-service
+    spec:
+      containers:
+        - name: market-service
+          image: axiom/market-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-secrets
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-service
+  namespace: axiom
+spec:
+  selector:
+    app: market-service
+  ports:
+    - port: 8081
+      targetPort: 8081

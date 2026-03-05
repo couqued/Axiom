@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
@@ -22,7 +23,8 @@ public class AdminConfigStore {
     private volatile int investAmountKrw;
     private volatile int maxPositions;
 
-    private static final String CONFIG_FILE = "admin-config.json";
+    @Value("${admin.config-path:admin-config.json}")
+    private String configFilePath;
 
     @PostConstruct
     void init() {
@@ -49,7 +51,7 @@ public class AdminConfigStore {
     private void saveToFile() {
         try {
             Snapshot snapshot = new Snapshot(paused, investAmountKrw, maxPositions);
-            objectMapper.writeValue(new File(CONFIG_FILE), snapshot);
+            objectMapper.writeValue(new File(configFilePath), snapshot);
             log.info("[AdminConfig] 설정 저장 — paused={}, investAmountKrw={}, maxPositions={}",
                     paused, investAmountKrw, maxPositions);
         } catch (IOException e) {
@@ -58,7 +60,7 @@ public class AdminConfigStore {
     }
 
     private void loadFromFile() {
-        File file = new File(CONFIG_FILE);
+        File file = new File(configFilePath);
         if (!file.exists()) return;
         try {
             Snapshot snapshot = objectMapper.readValue(file, Snapshot.class);

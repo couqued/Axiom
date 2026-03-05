@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: strategy-admin-config-pvc
+  namespace: axiom
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strategy-service
+  namespace: axiom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: strategy-service
+  template:
+    metadata:
+      labels:
+        app: strategy-service
+    spec:
+      containers:
+        - name: strategy-service
+          image: axiom/strategy-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8084
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-secrets
+          volumeMounts:
+            - name: admin-config-storage
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8084
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8084
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: admin-config-storage
+          persistentVolumeClaim:
+            claimName: strategy-admin-config-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: strategy-service
+  namespace: axiom
+spec:
+  selector:
+    app: strategy-service
+  ports:
+    - port: 8084
+      targetPort: 8084

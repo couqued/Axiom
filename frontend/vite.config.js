@@ -41,5 +41,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
     plugins: [react(), slackLifecyclePlugin(env.SLACK_WEBHOOK)],
+    server: {
+      proxy: {
+        '/api': 'http://localhost:8080',
+      },
+    },
   }
 })

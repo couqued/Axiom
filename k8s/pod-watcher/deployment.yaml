@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-watcher
+  namespace: axiom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-watcher
+  template:
+    metadata:
+      labels:
+        app: pod-watcher
+    spec:
+      serviceAccountName: pod-watcher
+      containers:
+        - name: pod-watcher
+          image: axiom/pod-watcher:latest
+          imagePullPolicy: Never
+          env:
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: axiom-secrets
+                  key: SLACK_WEBHOOK_URL
