@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: api-gateway
+  config:
+    import: optional:classpath:application-secret.yml
   cloud:
     gateway:
       globalcors:
@@ -40,6 +42,10 @@ spring:
           uri: http://localhost:8084
           predicates:
             - Path=/api/strategy/**
+
+slack:
+  webhook-url: PLACEHOLDER
+  enabled: false
 
 management:
   endpoints:

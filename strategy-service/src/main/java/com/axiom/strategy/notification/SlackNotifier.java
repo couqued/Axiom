@@ -59,6 +59,22 @@ public class SlackNotifier {
         send("⚠️ *[전략 오류]* " + message);
     }
 
+    /**
+     * 서비스 시작 알림.
+     */
+    public void sendServiceStarted() {
+        String time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        send("🟢 *strategy-service* 시작  (" + time + ")");
+    }
+
+    /**
+     * 서비스 종료 알림.
+     */
+    public void sendServiceStopped() {
+        String time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        send("🔴 *strategy-service* 종료  (" + time + ")");
+    }
+
     private void send(String text) {
         if (!enabled) {
             log.info("[Slack-DISABLED] {}", text);

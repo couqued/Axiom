@@ -44,6 +44,10 @@ kis:
 market-service:
   url: http://localhost:8081
 
+slack:
+  webhook-url: PLACEHOLDER
+  enabled: false
+
 management:
   endpoints:
     web:

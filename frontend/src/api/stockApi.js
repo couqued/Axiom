@@ -36,3 +36,34 @@ export const getPortfolio = () => request('/api/portfolio')
 
 // 계좌 잔고
 export const getBalance = () => request('/api/portfolio/balance')
+
+// 시장 상태 조회
+export const getMarketState = () => request('/api/strategy/market-state')
+
+// 시장 상태 수동 갱신
+export const refreshMarketState = () =>
+  request('/api/strategy/refresh-market-state', { method: 'POST' })
+
+// 전략 즉시 실행
+export const runStrategy = () =>
+  request('/api/strategy/run', { method: 'POST' })
+
+// Slack 알림 테스트
+export const testSlack = () =>
+  request('/api/strategy/test-slack', { method: 'POST' })
+
+// 관리자 — 현재 상태 조회
+export const getAdminStatus = () =>
+  request('/api/strategy/admin/status')
+
+// 관리자 — 매매 중단
+export const pauseTrading = () =>
+  request('/api/strategy/admin/pause', { method: 'POST' })
+
+// 관리자 — 매매 재개
+export const resumeTrading = () =>
+  request('/api/strategy/admin/resume', { method: 'POST' })
+
+// 관리자 — 투자 설정 변경
+export const updateAdminConfig = (body) =>
+  request('/api/strategy/admin/config', { method: 'PATCH', body: JSON.stringify(body) })

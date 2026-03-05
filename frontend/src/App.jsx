@@ -3,6 +3,8 @@ import Dashboard from './pages/Dashboard'
 import StockSearch from './pages/StockSearch'
 import OrderForm from './pages/OrderForm'
 import TradeHistory from './pages/TradeHistory'
+import Strategy from './pages/Strategy'
+import Admin from './pages/Admin'
 import './App.css'
 
 const TABS = [
@@ -10,22 +12,27 @@ const TABS = [
   { id: 'search', label: '종목검색', icon: '🔍' },
   { id: 'order', label: '주문', icon: '💹' },
   { id: 'history', label: '매매내역', icon: '📋' },
+  { id: 'strategy', label: '전략', icon: '⚡' },
 ]
 
 function App() {
   const [tab, setTab] = useState('dashboard')
+  const [adminOpen, setAdminOpen] = useState(false)
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Axiom AutoTrade</h1>
+        <h1>Axiom Automated Trade</h1>
+        <button className="admin-btn" onClick={() => setAdminOpen(true)}>⚙️</button>
       </header>
+      {adminOpen && <Admin onClose={() => setAdminOpen(false)} />}
 
       <main className="app-content">
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'search' && <StockSearch />}
         {tab === 'order' && <OrderForm />}
         {tab === 'history' && <TradeHistory />}
+        {tab === 'strategy' && <Strategy />}
       </main>
 
       <nav className="bottom-nav">

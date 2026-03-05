@@ -41,6 +41,10 @@ candle:
     - "006400"     # 삼성SDI
   default-days: 60 # 기본 조회 일수
 
+slack:
+  webhook-url: PLACEHOLDER
+  enabled: false
+
 management:
   endpoints:
     web:

@@ -1,5 +1,6 @@
 package com.axiom.strategy.engine;
 
+import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.MarketClient;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
@@ -31,6 +32,7 @@ import java.util.Optional;
 public class StrategyEngine {
 
     private final StrategyConfig strategyConfig;
+    private final AdminConfigStore adminConfigStore;
     private final MarketClient marketClient;
     private final OrderClient orderClient;
     private final PortfolioClient portfolioClient;
@@ -65,11 +67,16 @@ public class StrategyEngine {
      * </ol>
      */
     public void run() {
+        if (adminConfigStore.isPaused()) {
+            log.info("[Engine] 매매 중단 상태 — 전략 실행 스킵");
+            return;
+        }
+
         MarketState marketState = marketStateService.getCurrentState();
         List<String> tickers = watchTickers;
         List<String> activeStrategyNames = getActiveStrategyNames(marketState);
         int candleDays = strategyConfig.getCandleDays();
-        int maxPositions = strategyConfig.getPositionSizing().getMaxPositions();
+        int maxPositions = adminConfigStore.getMaxPositions();
 
         // 보유 포지션 한 번 조회 (BUY 가드 + 트레일링 스탑 + 타임 컷 공용)
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
@@ -190,7 +197,7 @@ public class StrategyEngine {
         // ── 수량 결정 ──────────────────────────────────────────────────────
         int quantity;
         if (signal.getAction() == SignalDto.Action.BUY) {
-            int investKrw = strategyConfig.getPositionSizing().getInvestAmountKrw();
+            int investKrw = adminConfigStore.getInvestAmountKrw();
             quantity = (int) (investKrw / signal.getPrice().doubleValue());
             if (quantity < 1) {
                 log.warn("[Engine] 투자금액 부족 — BUY 스킵 ticker: {}, price: {}, budget: {}원",

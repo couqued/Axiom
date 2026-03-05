@@ -1,3 +1,344 @@
+/* ── 관리 오버레이 ────────────────────────────────────────────────────── */
+
+.admin-btn {
+  background: none;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.admin-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.admin-panel {
+  width: 100%;
+  max-width: 480px;
+  background: #1a1d27;
+  border-radius: 16px 16px 0 0;
+  border-top: 1px solid #2d2d3a;
+  padding: 20px 16px 36px;
+  max-height: 85dvh;
+  overflow-y: auto;
+  animation: slideUp 0.22s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+.admin-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.admin-panel-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #e0e0e0;
+}
+
+.admin-close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.admin-section {
+  background: #0f1117;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #2d2d3a;
+  margin-bottom: 12px;
+}
+
+.admin-section-title {
+  font-size: 13px;
+  color: #888;
+  font-weight: 600;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.admin-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.admin-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.admin-status-dot.running { background: #7dffaa; box-shadow: 0 0 6px #7dffaa88; }
+.admin-status-dot.stopped { background: #ff6b6b; box-shadow: 0 0 6px #ff6b6b88; }
+
+.admin-status-label { font-size: 15px; font-weight: 600; color: #e0e0e0; }
+
+.admin-toggle-btn {
+  width: 100%;
+  padding: 13px;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+.admin-toggle-btn.pause  { background: #2d1414; color: #ff8080; border: 1px solid #6e1d1d; }
+.admin-toggle-btn.resume { background: #0a1f12; color: #7dffaa; border: 1px solid #1d6e3a; }
+.admin-toggle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.admin-note {
+  font-size: 11px;
+  color: #555;
+}
+
+.admin-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-field-label { font-size: 12px; color: #888; }
+
+.admin-input {
+  padding: 10px 12px;
+  background: #1a1d27;
+  border: 1px solid #2d2d3a;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 15px;
+  width: 100%;
+}
+
+.admin-save-btn {
+  width: 100%;
+  padding: 13px;
+  background: #0d1a2d;
+  color: #7dccff;
+  border: 1px solid #1a3d6e;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.admin-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.admin-future { opacity: 0.6; }
+
+.admin-future-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-future-list li {
+  font-size: 13px;
+  color: #666;
+  padding-left: 12px;
+  position: relative;
+}
+
+.admin-future-list li::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+}
+
+/* ── 전략 탭 ─────────────────────────────────────────────────────────── */
+
+/* 시장 상태 카드 */
+.market-state-card {
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid;
+  margin-bottom: 12px;
+}
+.market-state-card.bullish { background: #0a1f12; border-color: #1d6e3a; }
+.market-state-card.sideways { background: #1f1a09; border-color: #7a6419; }
+
+.market-state-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.market-state-label { font-size: 11px; color: #888; margin-bottom: 6px; }
+.market-state-value {
+  font-size: 22px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.state-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.state-badge.bullish { background: #1d6e3a; color: #7dffaa; }
+.state-badge.sideways { background: #7a6419; color: #ffd966; }
+
+.active-strategies { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.strategies-label { font-size: 12px; color: #888; margin-top: 4px; white-space: nowrap; }
+.strategy-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.strategy-badge {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: #2d2d3a;
+  color: #ccc;
+  border: 1px solid #3d3d4a;
+}
+
+.section-note { font-size: 11px; color: #555; margin-top: 12px; }
+
+/* 포지션 현황 */
+.position-card {
+  background: #1a1d27;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #2d2d3a;
+  margin-bottom: 12px;
+}
+.position-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.position-count { font-size: 20px; color: #aaa; }
+.position-count strong { color: #4fa3ff; }
+.position-count strong.full { color: #ff6b6b; }
+
+.position-bar {
+  height: 6px;
+  background: #2d2d3a;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+.position-bar-fill {
+  height: 100%;
+  background: #4fa3ff;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.position-bar-fill.full { background: #ff6b6b; }
+
+.position-list { display: flex; flex-direction: column; gap: 2px; }
+.position-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 8px 0;
+  border-top: 1px solid #2d2d3a;
+}
+.position-qty { margin-left: auto; color: #aaa; }
+
+.empty.small { font-size: 13px; padding: 10px 0; }
+
+/* 전략 제어 */
+.strategy-control {
+  background: #1a1d27;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #2d2d3a;
+  margin-bottom: 12px;
+}
+.control-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.run-btn {
+  padding: 13px;
+  background: #0d2610;
+  color: #7dffaa;
+  border: 1px solid #1d6e3a;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.slack-btn {
+  padding: 13px;
+  background: #0d1a2d;
+  color: #7dccff;
+  border: 1px solid #1a3d6e;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.slack-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.result-msg {
+  margin-top: 10px;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.result-msg.success { background: #0a1f0a; color: #7dffaa; border: 1px solid #1d6e3a; }
+.result-msg.fail { background: #2d1414; color: #ff8080; border: 1px solid #6e1d1d; }
+
+/* 전략 설정 */
+.config-card {
+  background: #1a1d27;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #2d2d3a;
+  margin-bottom: 12px;
+}
+.config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 10px;
+}
+.config-item { display: flex; flex-direction: column; gap: 4px; }
+.config-label { font-size: 11px; color: #666; }
+.config-value { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+
+/* refresh-btn small variant */
+.refresh-btn.small { padding: 6px 12px; font-size: 13px; }
+
+/* ── 전체 레이아웃 ────────────────────────────────────────────────────── */
+
 /* 전체 레이아웃 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -22,6 +363,9 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .app-header h1 {
