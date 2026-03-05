@@ -122,9 +122,12 @@ axiom/
 │   ├── build.gradle
 │   └── src/main/
 │       ├── java/com/axiom/gateway/
-│       │   └── GatewayApplication.java
+│       │   ├── GatewayApplication.java
+│       │   └── notification/
+│       │       └── ServiceLifecycleNotifier.java  # 서비스 시작/종료 Slack 알림
 │       └── resources/
-│           └── application.yml        # 라우팅 규칙 + CORS
+│           ├── application.yml        # 라우팅 규칙 + CORS
+│           └── application-secret.yml # Slack Webhook URL (gitignore)
 │
 ├── market-service/                    # 시세/종목 서비스 (port 8081)
 │   ├── build.gradle
@@ -138,6 +141,8 @@ axiom/
 │       │   ├── KisMarketApiService.java   # 현재가 조회 (mock/실제, 시장경보 코드 포함)
 │       │   ├── StockSearchService.java    # 종목 검색 (mock 데이터)
 │       │   └── StockScreenerService.java  # 코스피200+코스닥150 유니버스 로드 및 캐싱
+│       ├── notification/
+│       │   └── ServiceLifecycleNotifier.java  # 서비스 시작/종료 Slack 알림
 │       └── dto/
 │           ├── StockPriceDto.java         # marketWarnCode (시장경보) 포함
 │           ├── StockInfoDto.java
@@ -157,6 +162,8 @@ axiom/
 │       ├── entity/TradeOrder.java     # 주문 엔티티 (JPA)
 │       ├── repository/TradeOrderRepository.java
 │       ├── kafka/OrderEventProducer.java  # Kafka 이벤트 발행
+│       ├── notification/
+│       │   └── ServiceLifecycleNotifier.java  # 서비스 시작/종료 Slack 알림
 │       └── dto/
 │           ├── OrderRequest.java
 │           └── OrderResponse.java
@@ -173,6 +180,8 @@ axiom/
 │       ├── entity/Portfolio.java      # 보유 주식 엔티티 (JPA)
 │       ├── repository/PortfolioRepository.java
 │       ├── kafka/OrderEventConsumer.java  # Kafka 이벤트 소비
+│       ├── notification/
+│       │   └── ServiceLifecycleNotifier.java  # 서비스 시작/종료 Slack 알림
 │       └── dto/PortfolioItemDto.java
 │
 ├── strategy-service/                  # 자동매매 전략 서비스 (port 8084)
@@ -180,6 +189,11 @@ axiom/
 │   └── src/main/java/com/axiom/strategy/
 │       ├── StrategyApplication.java
 │       ├── config/StrategyConfig.java    # @ConfigurationProperties, WebClient 3개 Bean
+│       ├── admin/
+│       │   ├── AdminConfigStore.java    # 런타임 설정 저장소 (paused + 투자 설정, JSON 파일 영구 저장)
+│       │   ├── AdminController.java     # GET/POST /api/strategy/admin/**
+│       │   ├── AdminStatusDto.java
+│       │   └── AdminConfigDto.java
 │       ├── controller/
 │       │   └── StrategyController.java  # POST /api/strategy/run, GET /api/strategy/market-state
 │       ├── strategy/
@@ -200,7 +214,9 @@ axiom/
 │       │   ├── MarketClient.java        # market-service 캔들/현재가/지수 조회
 │       │   ├── OrderClient.java         # order-service 주문 위임
 │       │   └── PortfolioClient.java     # portfolio-service 보유 포지션 조회
-│       ├── notification/SlackNotifier.java   # Slack Incoming Webhook 알림
+│       ├── notification/
+│       │   ├── SlackNotifier.java             # Slack Incoming Webhook 알림
+│       │   └── ServiceLifecycleNotifier.java  # 서비스 시작/종료 Slack 알림
 │       ├── util/TradingCalendar.java    # 거래일 계산 유틸
 │       └── dto/
 │           ├── CandleDto.java
@@ -215,15 +231,19 @@ axiom/
     │   └── manifest.json              # PWA 설치 설정
     ├── package.json
     └── src/
-        ├── App.jsx                    # 탭 네비게이션 (대시보드/검색/주문/내역)
+        ├── App.jsx                    # 탭 네비게이션 (대시보드/검색/주문/내역/전략) + ⚙️ 관리자 버튼
         ├── App.css                    # 다크 테마, 모바일 최적화 UI
+        ├── vite.config.js             # Vite 설정 + Slack 서버 기동/종료 알림
+        ├── .env.local                 # Slack Webhook URL (gitignore 적용)
         ├── api/
         │   └── stockApi.js            # 백엔드 API 호출 헬퍼
         └── pages/
             ├── Dashboard.jsx          # 포트폴리오 현황 + 계좌 잔고
             ├── StockSearch.jsx        # 종목 검색 + 현재가
             ├── OrderForm.jsx          # 매수/매도 주문 폼
-            └── TradeHistory.jsx       # 주문/체결 내역
+            ├── TradeHistory.jsx       # 주문/체결 내역
+            ├── Strategy.jsx           # 전략 관리 탭 (시장 상태/포지션 현황/전략 설정)
+            └── Admin.jsx              # 관리자 패널 오버레이 (매매 정지/재개, 투자 설정)
 ```
 
 ---
@@ -237,6 +257,7 @@ Spring Cloud Gateway 기반 단일 진입점.
 - 프론트엔드는 모든 API를 `http://localhost:8080`으로 호출
 - 경로에 따라 각 마이크로서비스로 라우팅
 - 전역 CORS 처리
+- `ServiceLifecycleNotifier`: 서비스 기동(`🟢`) / 종료(`🔴`) Slack 알림 발송
 
 **라우팅 규칙:**
 
@@ -257,12 +278,13 @@ Spring Cloud Gateway 기반 단일 진입점.
 - **실제 모드**: KIS API `inquire-price` 호출 (API 키 필요)
 - **일봉 수집**: 매일 15:40 KIS `inquire-daily-itemchartprice` 호출 → `market.daily_candles` 저장
 - **토큰 중앙화**: KIS Access Token을 market-service에서 단독 발급 → `GET /internal/token`으로 타 서비스에 제공
+- `ServiceLifecycleNotifier`: 서비스 기동(`🟢`) / 종료(`🔴`) Slack 알림 발송
 
 ---
 
 ### order-service (port 8082)
 
-매수/매도 주문 처리 담당. PostgreSQL `orders` 스키마에 저장.
+매수/매도 주문 처리 담당. PostgreSQL `orders` 스키마에 저장. `ServiceLifecycleNotifier`로 기동/종료 Slack 알림 발송.
 
 **주문 처리 흐름:**
 ```
@@ -279,7 +301,7 @@ OrderController.buy/sell()
 
 ### portfolio-service (port 8083)
 
-보유 주식 현황 관리. Kafka 이벤트를 소비해 자동 갱신.
+보유 주식 현황 관리. Kafka 이벤트를 소비해 자동 갱신. `ServiceLifecycleNotifier`로 기동/종료 Slack 알림 발송.
 
 **평균 단가 계산 (매수 시):**
 ```
@@ -306,6 +328,8 @@ OrderController.buy/sell()
 - **스케줄러**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행 / 15:20 변동성 돌파 강제 청산
 - **Slack 알림**: 매매 신호 발생 시 + 주문 체결 결과 + 트레일링 스탑/타임 컷 청산 알림
 - **수동 트리거**: `POST /api/strategy/run` — 즉시 실행 (테스트용)
+- **관리자 패널**: `AdminConfigStore`가 런타임 설정(매매 중단 여부, 투자금액, 최대종목수)을 메모리 + `admin-config.json`으로 이중 관리. `paused=true` 시 `StrategyEngine` 스킵 (ForceExitScheduler는 항상 동작). REST API로 실시간 변경 가능.
+- `ServiceLifecycleNotifier`: 서비스 기동(`🟢`) / 종료(`🔴`) Slack 알림 발송 (SlackNotifier 위임)
 
 **자동매매 흐름:**
 ```
@@ -351,9 +375,11 @@ ForceExitScheduler (매일 15:20)
 React 19 + Vite 7 기반 PWA.
 
 - **다크 테마**, 모바일 앱 스타일 UI
-- **하단 탭 네비게이션** (대시보드 / 종목검색 / 주문 / 매매내역)
+- **하단 탭 네비게이션** (대시보드 / 종목검색 / 주문 / 매매내역 / 전략)
+- **헤더 ⚙️ 버튼** → 관리자 패널 오버레이 (매매 긴급 정지/재개, 투자 설정 변경)
 - max-width 480px → 스마트폰 화면에 최적화
 - PWA manifest → 스마트폰 홈화면에 아이콘으로 설치 가능
+- Vite dev server 기동/종료 시 Slack 알림 발송 (`vite.config.js` + `.env.local`)
 
 ---
 
@@ -491,6 +517,24 @@ PostgreSQL 단일 인스턴스, 스키마 분리 방식.
 > strategy-service는 스케줄러(평일 09:05~15:20, 5분 주기)로 자동 실행됩니다.
 > `/api/strategy/run`은 장 외 시간에도 수동으로 테스트할 때 사용합니다.
 
+### Strategy Service — 관리자 패널
+
+| Method | URL | 설명 |
+|--------|-----|------|
+| GET | `/api/strategy/admin/status` | 현재 매매 상태 + 투자 설정 조회 |
+| POST | `/api/strategy/admin/pause` | 매매 긴급 정지 (StrategyEngine 스킵) |
+| POST | `/api/strategy/admin/resume` | 매매 재개 |
+| PATCH | `/api/strategy/admin/config` | 투자 설정 변경 (투자금액/최대종목수) |
+
+**상태 조회 응답 예시:**
+```json
+{
+  "paused": false,
+  "investAmountKrw": 500000,
+  "maxPositions": 3
+}
+```
+
 ### Market Service — 내부 호출 (strategy-service → market-service)
 
 | Method | URL | 설명 |
@@ -565,11 +609,17 @@ KIS API 키 없이도 전체 기능 테스트 가능.
 | 서비스 | 설정 파일 경로 |
 |--------|-------------|
 | api-gateway | `api-gateway/src/main/resources/application.yml` |
+| api-gateway (Slack) | `api-gateway/src/main/resources/application-secret.yml` (gitignore) |
 | market-service | `market-service/src/main/resources/application.yml` |
+| market-service (KIS + Slack) | `market-service/src/main/resources/application-secret.yml` (gitignore) |
 | order-service | `order-service/src/main/resources/application.yml` |
+| order-service (KIS + Slack) | `order-service/src/main/resources/application-secret.yml` (gitignore) |
 | portfolio-service | `portfolio-service/src/main/resources/application.yml` |
+| portfolio-service (KIS + Slack) | `portfolio-service/src/main/resources/application-secret.yml` (gitignore) |
 | strategy-service | `strategy-service/src/main/resources/application.yml` |
-| strategy-service (Slack) | `strategy-service/src/main/resources/application-secret.yml` |
+| strategy-service (Slack) | `strategy-service/src/main/resources/application-secret.yml` (gitignore) |
+| strategy-service (관리자 설정) | `strategy-service/admin-config.json` (런타임 생성, gitignore) |
+| frontend (Slack) | `frontend/.env.local` (gitignore) |
 | 인프라 | `docker-compose.yml` |
 
 ### DB 접속 정보
@@ -859,11 +909,14 @@ kis:
 - [x] 포지션 사이징 (1회 50만 원, 수량 = `floor(투자금액/현재가)`)
 - [x] 최대 보유 종목 수 제한 (`maxPositions=3`, BUY 3단계 가드 + `boughtThisRun` 카운터)
 - [x] 전량 매도 연동 (portfolio-service 보유 수량 기반 SELL)
+- [x] 관리자 패널 (매매 긴급 정지/재개, 투자 설정 변경, admin-config.json 영구 저장)
+- [x] 전략 관리 탭 (시장 상태 카드, 포지션 현황, 수동 실행, Slack 테스트)
+- [x] 서비스 생명주기 Slack 알림 (5개 Spring Boot 서비스 + Vite 프론트엔드 기동/종료)
 
 ### 진행 예정
 - [ ] KIS API 실제 연동 (실계좌 API 키 발급 후)
 - [ ] 추가 전략 구현 (MACD — 추세 지속성 확인)
-- [ ] 전략 설정 UI (프론트엔드에서 전략 ON/OFF, 종목·수량 설정)
+- [ ] 전략 ON/OFF UI (프론트엔드에서 전략별 활성화/비활성화)
 - [ ] 실시간 시세 (WebSocket / SSE)
 - [ ] 손익 계산 (현재가 기반 평가손익 표시)
 - [ ] 알림 기능 (목표가 도달 시 푸시 알림)
@@ -884,6 +937,48 @@ kis:
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
 
 ---
+<details>
+<summary><strong>[v0.4.0] - 2026-03-05</strong> &nbsp;·&nbsp; 관리자 패널 + 서비스 생명주기 Slack 알림 + 전략 관리 탭</summary>
+
+<br>
+
+#### Added
+- **관리자 패널** (strategy-service + frontend)
+  - `AdminConfigStore.java`: 런타임 설정 저장소 — `paused`, `investAmountKrw`, `maxPositions`를 메모리(`volatile`)와 `admin-config.json`(JSON 파일) 이중 관리. 서비스 재시작 시 파일 설정이 yml 기본값보다 우선 적용.
+  - `AdminController.java`: `GET /api/strategy/admin/status`, `POST /api/strategy/admin/pause|resume`, `PATCH /api/strategy/admin/config` 엔드포인트
+  - `StrategyEngine`: `AdminConfigStore`에서 투자 설정 실시간 조회 (yml 직접 참조 제거)
+  - `Admin.jsx` (프론트엔드): 헤더 ⚙️ 버튼 → 슬라이드업 오버레이 패널 (매매 긴급 정지/재개 토글 + 투자 설정 폼)
+  - `paused=true` 상태에서 `StrategyEngine.run()` 즉시 스킵 (`ForceExitScheduler`는 항상 동작)
+  - `admin-config.json` gitignore 적용 (`**/admin-config.json`)
+- **서비스 생명주기 Slack 알림** (5개 서비스 + 프론트엔드)
+  - 모든 5개 Spring Boot 서비스에 `ServiceLifecycleNotifier.java` 추가
+    - `ApplicationReadyEvent` → `🟢 *{서비스명}* 시작` 알림
+    - `ContextClosedEvent` (SIGTERM) → `🔴 *{서비스명}* 종료` 알림
+  - strategy-service: 기존 `SlackNotifier`에 `sendServiceStarted()`, `sendServiceStopped()` 추가 후 위임
+  - 나머지 4개 서비스: 독립형 `ServiceLifecycleNotifier` + WebFlux `WebClient` 직접 사용
+  - api-gateway: Lombok 없음 → `LoggerFactory.getLogger()` 사용
+  - market/order/portfolio/api-gateway: `application.yml`에 `slack.webhook-url: PLACEHOLDER` + `slack.enabled: false` 추가, `application-secret.yml`에 실제 URL + `enabled: true` 추가
+  - 프론트엔드 Vite dev server: `vite.config.js` `configureServer` hook으로 기동/종료 알림. `SLACK_WEBHOOK`을 `.env.local`에서 `loadEnv()`로 로드 (Node.js 서버 사이드, 브라우저 미노출). `.env.local` gitignore 적용 (`*.local`)
+- **전략 관리 탭** (`Strategy.jsx`)
+  - 시장 상태 카드 (BULLISH=녹색 / SIDEWAYS=노란색)
+  - 포지션 현황 (보유 수 / maxPositions, 진행 바)
+  - 전략 수동 실행 + Slack 테스트 버튼
+  - 전략 설정 6개 항목 표시
+
+#### Changed
+- `SlackNotifier` (strategy-service): `sendServiceStarted()`, `sendServiceStopped()` 메서드 추가
+- `StrategyEngine`: `AdminConfigStore`에서 투자 설정 실시간 조회로 변경 (yml `position-sizing` 직접 참조 제거)
+- `App.jsx`: 앱 제목 "Axiom Automated Trade" 변경, 헤더에 ⚙️ 관리자 버튼 추가, Strategy 탭 추가
+- `stockApi.js`: 관리자 API 4개 + 전략 API 4개 추가 (총 8개)
+- `.gitignore`: `**/admin-config.json` 추가
+
+#### Notes
+- `ForceExitScheduler`는 `paused` 상태와 무관하게 항상 동작 (오버나이트 보호)
+- 서비스 종료 알림은 `SIGTERM`(Ctrl+C, 정상 종료) 시에만 발송, `SIGKILL`(`kill -9`)은 JVM 즉시 종료로 불가
+- `admin-config.json`은 strategy-service 실행 디렉토리에 생성됨
+
+</details>
+
 <details>
 <summary><strong>[v0.3.0] - 2026-03-05</strong> &nbsp;·&nbsp; 종목 스크리닝 + 포지션 사이징 + 예산 관리</summary>
 

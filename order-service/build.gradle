@@ -25,3 +25,7 @@ dependencies {
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
 }
+
+tasks.named('bootRun') {
+    jvmArgs(['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8'])
+}

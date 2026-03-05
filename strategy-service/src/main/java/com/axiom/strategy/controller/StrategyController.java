@@ -28,8 +28,12 @@ public class StrategyController {
     /** 전략 즉시 실행 (테스트 / 수동 트리거용) */
     @PostMapping("/run")
     public ResponseEntity<Map<String, String>> run() {
-        strategyEngine.run();
-        return ResponseEntity.ok(Map.of("result", "전략 실행 완료. 로그를 확인하세요."));
+        StrategyEngine.RunResult result = strategyEngine.run();
+        String message = result.paused()
+                ? "매매 중단 상태 — 전략 실행 스킵"
+                : String.format("종목 %d개 평가 완료 — 매수 %d건, 매도 %d건",
+                        result.evaluated(), result.bought(), result.sold());
+        return ResponseEntity.ok(Map.of("result", message));
     }
 
     /** 현재 시장 상태 조회 */
@@ -53,6 +57,7 @@ public class StrategyController {
         SignalDto testSignal = SignalDto.builder()
                 .action(SignalDto.Action.BUY)
                 .ticker("005930")
+                .stockName("삼성전자")
                 .price(new BigDecimal("216500"))
                 .strategyName("golden-cross")
                 .reason("테스트 — Slack 연동 확인용 신호")

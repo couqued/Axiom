@@ -354,6 +354,31 @@ if (hour == 15 && minute > 20) return;
 
 ## 9. 설정 방법
 
+### 런타임 관리자 설정 (AdminConfigStore)
+
+`application.yml` 재시작 없이 실시간으로 매매 동작을 변경할 수 있습니다.
+
+```bash
+# 매매 긴급 정지 (StrategyEngine.run() 스킵, ForceExitScheduler는 항상 동작)
+POST http://localhost:8084/api/strategy/admin/pause
+
+# 매매 재개
+POST http://localhost:8084/api/strategy/admin/resume
+
+# 투자 설정 변경 (null 필드는 기존 값 유지)
+PATCH http://localhost:8084/api/strategy/admin/config
+{ "investAmountKrw": 300000, "maxPositions": 2 }
+
+# 현재 설정 조회
+GET http://localhost:8084/api/strategy/admin/status
+→ { "paused": false, "investAmountKrw": 500000, "maxPositions": 3 }
+```
+
+설정은 `admin-config.json`에 자동 저장되어 서비스 재시작 후에도 유지됩니다.
+파일이 없으면 `application.yml`의 `position-sizing` 기본값을 사용합니다.
+
+> **우선순위:** `admin-config.json` > `application.yml` `position-sizing` 값
+
 ### application.yml 전체 예시
 
 ```yaml
@@ -445,10 +470,13 @@ strategy:
 
 **예산 구조:** 50만 원 × 최대 3종목 = **최대 150만 원 동시 투자**
 
+> **설정 소스:** `StrategyEngine`은 `investAmountKrw`와 `maxPositions`를 `application.yml` 대신 `AdminConfigStore`에서 실시간 조회합니다.
+> 관리자 패널(REST API 또는 `admin-config.json`)에서 설정이 변경되면 다음 5분 사이클부터 즉시 반영됩니다.
+
 ### 수량 계산
 
 ```
-BUY 수량 = floor(investAmountKrw / 현재가)
+BUY 수량 = floor(adminConfigStore.getInvestAmountKrw() / 현재가)
 
 예시:
   삼성전자 75,000원 → floor(500,000 / 75,000) = 6주

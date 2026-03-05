@@ -109,9 +109,11 @@ public class TimeCutService {
                     log.info("[TimeCut] 강제 청산 — ticker: {}, qty: {}, success: {}",
                             ticker, position.getQuantity(), success);
 
+                    String stockLabel = position.getStockName() != null
+                            ? position.getStockName() + " (" + ticker + ")" : ticker;
                     slackNotifier.sendError(String.format(
-                            "⏱️ [타임 컷] %s — %d거래일 경과 (기준: %d일) → 강제 청산 (%s)",
-                            ticker, elapsed, maxDays, success ? "성공" : "실패"));
+                            "⏱️ [타임 컷] %s — %d거래일 경과 (기준: %d일) → 강제 청산 %,.0f원 (%s)",
+                            stockLabel, elapsed, maxDays, currentPrice, success ? "성공" : "실패"));
                 });
     }
 }

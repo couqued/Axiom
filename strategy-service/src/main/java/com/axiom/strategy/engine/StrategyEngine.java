@@ -66,10 +66,12 @@ public class StrategyEngine {
      *   <li>트레일링 스탑 + 타임 컷 체크</li>
      * </ol>
      */
-    public void run() {
+    public record RunResult(int evaluated, int bought, int sold, boolean paused) {}
+
+    public RunResult run() {
         if (adminConfigStore.isPaused()) {
             log.info("[Engine] 매매 중단 상태 — 전략 실행 스킵");
-            return;
+            return new RunResult(0, 0, 0, true);
         }
 
         MarketState marketState = marketStateService.getCurrentState();
@@ -80,26 +82,30 @@ public class StrategyEngine {
 
         // 보유 포지션 한 번 조회 (BUY 가드 + 트레일링 스탑 + 타임 컷 공용)
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
-        int[] boughtThisRun = {0}; // 이번 사이클에서 신규 매수된 종목 수
+        int[] boughtThisRun = {0};
+        int[] soldThisRun   = {0};
 
         log.info("[Engine] 전략 실행 시작 — 시장: {}, tickers: {}개, 전략: {}, 보유: {}개/{}개",
                 marketState, tickers.size(), activeStrategyNames, positions.size(), maxPositions);
 
         for (String ticker : tickers) {
             try {
-                runForTicker(ticker, candleDays, activeStrategyNames, positions, boughtThisRun, maxPositions);
+                runForTicker(ticker, candleDays, activeStrategyNames, positions, boughtThisRun, soldThisRun, maxPositions);
             } catch (Exception e) {
                 log.error("[Engine] 종목 처리 오류 — ticker: {}, error: {}", ticker, e.getMessage());
             }
         }
 
-        log.info("[Engine] 전략 실행 완료");
+        log.info("[Engine] 전략 실행 완료 — 평가: {}개, 매수: {}건, 매도: {}건",
+                tickers.size(), boughtThisRun[0], soldThisRun[0]);
+        return new RunResult(tickers.size(), boughtThisRun[0], soldThisRun[0], false);
     }
 
     private void runForTicker(String ticker, int candleDays,
                                List<String> activeStrategyNames,
                                List<PortfolioItemDto> positions,
                                int[] boughtThisRun,
+                               int[] soldThisRun,
                                int maxPositions) {
         // 현재가 조회 (시가, 고가, 저가, 현재가 포함)
         StockPriceDto priceData = marketClient.getCurrentPrice(ticker);
@@ -138,7 +144,8 @@ public class StrategyEngine {
             }
 
             try {
-                SignalDto signal = strategy.evaluate(ticker, allCandles);
+                SignalDto signal = strategy.evaluate(ticker, allCandles)
+                        .toBuilder().stockName(priceData.getStockName()).build();
                 log.info("[Engine] 신호 — ticker: {}, strategy: {}, action: {}, reason: {}",
                         ticker, strategy.getName(), signal.getAction(), signal.getReason());
 
@@ -166,9 +173,11 @@ public class StrategyEngine {
                         }
                     }
 
-                    boolean bought = handleSignal(signal, positions);
-                    if (bought && signal.getAction() == SignalDto.Action.BUY) {
+                    boolean traded = handleSignal(signal, positions);
+                    if (traded && signal.getAction() == SignalDto.Action.BUY) {
                         boughtThisRun[0]++;
+                    } else if (traded && signal.getAction() == SignalDto.Action.SELL) {
+                        soldThisRun[0]++;
                     }
                 }
             } catch (Exception e) {
@@ -192,9 +201,7 @@ public class StrategyEngine {
      * @return 주문 성공 여부 (BUY 성공 시 boughtThisRun 카운트 증가용)
      */
     private boolean handleSignal(SignalDto signal, List<PortfolioItemDto> positions) {
-        slackNotifier.sendSignal(signal);
-
-        // ── 수량 결정 ──────────────────────────────────────────────────────
+        // ── 수량 결정 (먼저 검증 — 실행 불가 시 Slack 발송 없이 스킵) ──────
         int quantity;
         if (signal.getAction() == SignalDto.Action.BUY) {
             int investKrw = adminConfigStore.getInvestAmountKrw();
@@ -212,11 +219,14 @@ public class StrategyEngine {
                     .filter(p -> p.getTicker().equals(signal.getTicker()))
                     .findFirst();
             if (position.isEmpty()) {
-                log.warn("[Engine] 보유 포지션 없음 — SELL 스킵 ticker: {}", signal.getTicker());
+                log.info("[Engine] 보유 포지션 없음 — SELL 스킵 ticker: {}", signal.getTicker());
                 return false;
             }
             quantity = position.get().getQuantity();
         }
+
+        // ── 신호 알림 (실제 주문 실행 직전에만 발송) ──────────────────────
+        slackNotifier.sendSignal(signal);
 
         // ── 주문 실행 ──────────────────────────────────────────────────────
         OrderRequest orderRequest = OrderRequest.builder()

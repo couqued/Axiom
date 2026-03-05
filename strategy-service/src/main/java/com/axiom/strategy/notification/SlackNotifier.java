@@ -25,13 +25,13 @@ public class SlackNotifier {
         String emoji  = signal.getAction() == SignalDto.Action.BUY ? "🟢" : "🔴";
         String action = signal.getAction() == SignalDto.Action.BUY ? "매수" : "매도";
         String text = String.format(
-                "%s *[%s 신호]* `%s`\n" +
+                "%s *[%s 신호]* %s\n" +
                 "> 전략: %s\n" +
                 "> 가격: %s원\n" +
                 "> 사유: %s",
-                emoji, action, signal.getTicker(),
+                emoji, action, formatStock(signal.getStockName(), signal.getTicker()),
                 signal.getStrategyName(),
-                signal.getPrice() != null ? signal.getPrice().toPlainString() : "-",
+                formatPrice(signal.getPrice()),
                 signal.getReason()
         );
         send(text);
@@ -44,10 +44,10 @@ public class SlackNotifier {
         String status = success ? "✅ 주문 체결" : "❌ 주문 실패";
         String action = signal.getAction() == SignalDto.Action.BUY ? "매수" : "매도";
         String text = String.format(
-                "%s `%s` %s 완료\n> 전략: %s | 가격: %s원",
-                status, signal.getTicker(), action,
+                "%s %s %s 완료\n> 전략: %s | 가격: %s원",
+                status, formatStock(signal.getStockName(), signal.getTicker()), action,
                 signal.getStrategyName(),
-                signal.getPrice() != null ? signal.getPrice().toPlainString() : "-"
+                formatPrice(signal.getPrice())
         );
         send(text);
     }
@@ -73,6 +73,16 @@ public class SlackNotifier {
     public void sendServiceStopped() {
         String time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         send("🔴 *strategy-service* 종료  (" + time + ")");
+    }
+
+    /** "삼성전자 (005930)" 형태로 포맷. stockName이 없으면 ticker만 반환. */
+    private String formatStock(String stockName, String ticker) {
+        return (stockName != null && !stockName.isBlank()) ? stockName + " (" + ticker + ")" : ticker;
+    }
+
+    /** 가격에 천 단위 콤마 적용. null이면 "-" 반환. */
+    private String formatPrice(java.math.BigDecimal price) {
+        return price != null ? String.format("%,.0f", price) : "-";
     }
 
     private void send(String text) {

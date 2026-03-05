@@ -92,9 +92,11 @@ public class TrailingStopService {
                     log.info("[TrailingStop] 매도 주문 — ticker: {}, qty: {}, success: {}",
                             ticker, position.getQuantity(), success);
 
+                    String stockLabel = position.getStockName() != null
+                            ? position.getStockName() + " (" + ticker + ")" : ticker;
                     slackNotifier.sendError(String.format(
-                            "🛑 [트레일링 스탑] %s — 고점 대비 %.0f%% 하락 → 매도 (%s)",
-                            ticker, stopPercent, success ? "성공" : "실패"));
+                            "🛑 [트레일링 스탑] %s — 고점 대비 %.0f%% 하락 → 매도 %,.0f원 (%s)",
+                            stockLabel, stopPercent, currentPrice, success ? "성공" : "실패"));
                 });
     }
 }

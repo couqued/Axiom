@@ -1,5 +1,6 @@
 package com.axiom.strategy.admin;
 
+import com.axiom.strategy.config.StrategyConfig;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 public class AdminController {
 
     private final AdminConfigStore adminConfigStore;
+    private final StrategyConfig strategyConfig;
 
     /** 현재 관리자 설정 상태 조회 */
     @GetMapping("/status")
@@ -44,7 +46,9 @@ public class AdminController {
         return new AdminStatusDto(
                 adminConfigStore.isPaused(),
                 adminConfigStore.getInvestAmountKrw(),
-                adminConfigStore.getMaxPositions()
+                adminConfigStore.getMaxPositions(),
+                strategyConfig.getTrailingStop().getStopPercent(),
+                strategyConfig.getTimeCut().getMaxHoldingDays()
         );
     }
 }

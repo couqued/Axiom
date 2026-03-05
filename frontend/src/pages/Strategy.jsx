@@ -1,10 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getMarketState, refreshMarketState, runStrategy, testSlack, getPortfolio } from '../api/stockApi'
-
-const MAX_POSITIONS = 3
-const INVEST_AMOUNT = 500000
-const TRAILING_STOP_PCT = 7.0
-const TIME_CUT_DAYS = 3
+import { getMarketState, refreshMarketState, runStrategy, testSlack, getPortfolio, getAdminStatus } from '../api/stockApi'
 
 const STRATEGIES_BY_STATE = {
   BULLISH: ['변동성 돌파', '골든크로스'],
@@ -14,6 +9,7 @@ const STRATEGIES_BY_STATE = {
 export default function Strategy() {
   const [marketState, setMarketState] = useState(null)
   const [positions, setPositions] = useState([])
+  const [adminConfig, setAdminConfig] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -24,8 +20,8 @@ export default function Strategy() {
   const [slackMsg, setSlackMsg] = useState(null)
 
   useEffect(() => {
-    Promise.all([getMarketState(), getPortfolio()])
-      .then(([ms, p]) => { setMarketState(ms.state); setPositions(p) })
+    Promise.all([getMarketState(), getPortfolio(), getAdminStatus()])
+      .then(([ms, p, cfg]) => { setMarketState(ms.state); setPositions(p); setAdminConfig(cfg) })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
@@ -75,8 +71,9 @@ export default function Strategy() {
 
   const isBullish = marketState === 'BULLISH'
   const activeStrategies = STRATEGIES_BY_STATE[marketState] ?? []
-  const positionRatio = positions.length / MAX_POSITIONS
-  const isFull = positions.length >= MAX_POSITIONS
+  const maxPositions = adminConfig?.maxPositions ?? '-'
+  const positionRatio = adminConfig ? positions.length / adminConfig.maxPositions : 0
+  const isFull = adminConfig ? positions.length >= adminConfig.maxPositions : false
 
   return (
     <div className="page">
@@ -119,7 +116,7 @@ export default function Strategy() {
           <span>보유 포지션</span>
           <span className="position-count">
             <strong className={isFull ? 'full' : ''}>{positions.length}</strong>
-            {' / '}{MAX_POSITIONS}
+            {' / '}{maxPositions}
           </span>
         </div>
         <div className="position-bar">
@@ -169,19 +166,19 @@ export default function Strategy() {
         <div className="config-grid">
           <div className="config-item">
             <span className="config-label">1회 매수금액</span>
-            <span className="config-value">{INVEST_AMOUNT.toLocaleString()}원</span>
+            <span className="config-value">{adminConfig ? adminConfig.investAmountKrw.toLocaleString() + '원' : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">최대 보유 종목</span>
-            <span className="config-value">{MAX_POSITIONS}종목</span>
+            <span className="config-value">{adminConfig ? adminConfig.maxPositions + '종목' : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">트레일링 스탑</span>
-            <span className="config-value">고점 -{TRAILING_STOP_PCT}%</span>
+            <span className="config-value">{adminConfig ? `고점 -${adminConfig.trailingStopPct}%` : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">타임 컷</span>
-            <span className="config-value">{TIME_CUT_DAYS}거래일</span>
+            <span className="config-value">{adminConfig ? adminConfig.timeCutDays + '거래일' : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">감시 유니버스</span>
@@ -192,7 +189,7 @@ export default function Strategy() {
             <span className="config-value">5분 (09:05~15:20)</span>
           </div>
         </div>
-        <p className="section-note">설정 변경은 application.yml에서</p>
+        <p className="section-note">투자 설정(매수금액·최대종목)은 관리자 패널에서 변경 가능</p>
       </div>
     </div>
   )

@@ -29,3 +29,7 @@ dependencyManagement {
         mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
     }
 }
+
+tasks.named('bootRun') {
+    jvmArgs(['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8'])
+}

@@ -60,12 +60,15 @@ api-gateway/
 ├── build.gradle
 └── src/main/
     ├── java/com/axiom/gateway/
-    │   └── GatewayApplication.java   ← 진입점 (코드 1개)
+    │   ├── GatewayApplication.java   ← 진입점
+    │   └── notification/
+    │       └── ServiceLifecycleNotifier.java  ← 서비스 기동/종료 Slack 알림
     └── resources/
-        └── application.yml           ← 모든 설정
+        ├── application.yml           ← 모든 설정 + slack 플레이스홀더
+        └── application-secret.yml    ← Slack Webhook URL (gitignore)
 ```
 
-소스 코드가 `GatewayApplication.java` 단 1개입니다. 라우팅 로직 전부가 `application.yml` 설정으로 동작합니다.
+라우팅 로직 전부가 `application.yml` 설정으로 동작합니다. `ServiceLifecycleNotifier`는 api-gateway에 Lombok이 없으므로 `LoggerFactory.getLogger()`를 사용합니다.
 
 ### `build.gradle`
 
@@ -168,6 +171,8 @@ market-service/
     │   ├── entity/DailyCandle.java        ← market.daily_candles 엔티티
     │   ├── repository/DailyCandleRepository.java
     │   ├── scheduler/CandleCollectScheduler.java ← 평일 15:40 자동 수집
+    │   ├── notification/
+    │   │   └── ServiceLifecycleNotifier.java ← 서비스 기동/종료 Slack 알림
     │   └── dto/
     │       ├── StockPriceDto.java         ← marketWarnCode + isSafe() 포함 (신규 필드)
     │       ├── StockInfoDto.java
@@ -394,12 +399,14 @@ order-service/
     │   ├── entity/TradeOrder.java             ← orders.trade_orders 엔티티
     │   ├── repository/TradeOrderRepository.java
     │   ├── kafka/OrderEventProducer.java      ← Kafka 이벤트 발행
+    │   ├── notification/
+    │   │   └── ServiceLifecycleNotifier.java  ← 서비스 기동/종료 Slack 알림
     │   └── dto/
     │       ├── OrderRequest.java
     │       └── OrderResponse.java
     └── resources/
         ├── application.yml
-        └── application-secret.yml             ← KIS API 키 (gitignore)
+        └── application-secret.yml             ← KIS API 키 + Slack Webhook URL (gitignore)
 ```
 
 ### `build.gradle`
@@ -577,10 +584,12 @@ portfolio-service/
     │   ├── kafka/OrderEventConsumer.java         ← Kafka 이벤트 소비
     │   ├── entity/Portfolio.java                 ← portfolio.portfolio 엔티티
     │   ├── repository/PortfolioRepository.java
+    │   ├── notification/
+    │   │   └── ServiceLifecycleNotifier.java     ← 서비스 기동/종료 Slack 알림
     │   └── dto/PortfolioItemDto.java
     └── resources/
         ├── application.yml
-        └── application-secret.yml               ← KIS API 키 (gitignore)
+        └── application-secret.yml               ← KIS API 키 + Slack Webhook URL (gitignore)
 ```
 
 ### `build.gradle`
@@ -724,6 +733,11 @@ strategy-service/
     ├── java/com/axiom/strategy/
     │   ├── StrategyApplication.java
     │   ├── config/StrategyConfig.java          ← 전략 설정 + WebClient 3개 Bean
+    │   ├── admin/
+    │   │   ├── AdminConfigStore.java           ← 런타임 설정 저장소 (paused + 투자 설정, JSON 영구 저장)
+    │   │   ├── AdminController.java            ← GET/POST/PATCH /api/strategy/admin/**
+    │   │   ├── AdminStatusDto.java
+    │   │   └── AdminConfigDto.java
     │   ├── controller/StrategyController.java  ← POST /api/strategy/run, GET /api/strategy/market-state
     │   ├── strategy/
     │   │   ├── TradingStrategy.java            ← 전략 인터페이스
@@ -743,7 +757,9 @@ strategy-service/
     │   │   ├── MarketClient.java               ← market-service 캔들/현재가/지수 조회
     │   │   ├── OrderClient.java                ← 매수/매도 위임 (order-service)
     │   │   └── PortfolioClient.java            ← 보유 포지션 조회 (portfolio-service)
-    │   ├── notification/SlackNotifier.java     ← Slack Webhook 알림
+    │   ├── notification/
+    │   │   ├── SlackNotifier.java              ← Slack Webhook 알림
+    │   │   └── ServiceLifecycleNotifier.java   ← 서비스 기동/종료 Slack 알림 (SlackNotifier 위임)
     │   ├── util/TradingCalendar.java           ← 주말 제외 거래일 계산
     │   └── dto/
     │       ├── CandleDto.java
@@ -809,6 +825,44 @@ portfolio-service:
 slack:
   webhook-url: PLACEHOLDER   # application-secret.yml에서 실제 URL로 덮어씀
   enabled: false             # true 변경 시 실제 발송
+```
+
+### `AdminConfigStore.java`
+
+런타임 관리자 설정을 메모리와 JSON 파일 두 곳에 이중 저장합니다.
+
+```java
+@Component
+public class AdminConfigStore {
+    private volatile boolean paused = false;          // 매매 중단 여부
+    private volatile int investAmountKrw;             // 1회 매수 금액 (원)
+    private volatile int maxPositions;                // 최대 동시 보유 종목 수
+
+    @PostConstruct
+    void init() {
+        // 1) yml 기본값으로 초기화
+        // 2) admin-config.json 존재 시 파일 값으로 덮어쓰기 (서비스 재시작 시 설정 복원)
+    }
+
+    // 설정 변경 시 admin-config.json에 자동 저장
+    public void setPaused(boolean paused)  { this.paused = paused; saveToFile(); }
+    public void setConfig(int investAmountKrw, int maxPositions) { ...; saveToFile(); }
+}
+```
+
+- `volatile` 필드: 별도 락 없이 멀티스레드 환경에서 가시성 보장
+- `admin-config.json` 위치: strategy-service 실행 디렉토리 (gitignore 적용)
+- `paused=true` 상태에서 `StrategyEngine.run()` 즉시 스킵
+- `ForceExitScheduler`는 `paused` 상태와 무관하게 항상 동작 (오버나이트 보호)
+
+### `AdminController.java`
+
+```java
+GET  /api/strategy/admin/status  → AdminStatusDto { paused, investAmountKrw, maxPositions }
+POST /api/strategy/admin/pause   → paused=true, 현재 상태 반환
+POST /api/strategy/admin/resume  → paused=false, 현재 상태 반환
+PATCH /api/strategy/admin/config → AdminConfigDto { investAmountKrw?, maxPositions? }
+                                   null 필드는 기존 값 유지 (partial update)
 ```
 
 ### `TradingStrategy.java` — 전략 인터페이스
@@ -910,10 +964,11 @@ void init() { watchTickers = strategyConfig.getWatchTickers(); }  // yml fallbac
 void updateWatchTickers(List<String> tickers) { watchTickers = tickers; }  // 08:30 갱신
 
 public void run() {
+    if (adminConfigStore.isPaused()) { log.info("[Engine] 매매 중단 상태 — 스킵"); return; }
     positions       = portfolioClient.getPositions()          // ① 보유 포지션 조회
     marketState     = marketStateService.getCurrentState()    // ② 시장 상태 확인
     activeNames     = getActiveStrategyNames(marketState)     // ③ 전략 필터링
-    maxPositions    = positionSizing.getMaxPositions()        // ④ 최대 보유 수
+    maxPositions    = adminConfigStore.getMaxPositions()      // ④ 최대 보유 수 (AdminConfigStore)
     int[] boughtThisRun = {0}                                 // ⑤ 이번 사이클 신규 매수 수
 
     for (ticker in watchTickers):
@@ -939,7 +994,7 @@ public void run() {
         timeCutService.checkAndCut(ticker, currentPrice, positions)
 }
 
-// handleSignal(): BUY — quantity = floor(investAmountKrw / price), SELL — portfolio 전량
+// handleSignal(): BUY — quantity = floor(adminConfigStore.getInvestAmountKrw() / price), SELL — portfolio 전량
 // getActiveStrategyNames(): BULLISH→["volatility-breakout","golden-cross"], SIDEWAYS→["rsi-bollinger"]
 ```
 
@@ -1028,6 +1083,8 @@ GET http://localhost:8083/api/portfolio → List<PortfolioItemDto>
 sendSignal(signal)            → 매수/매도 신호 발생 시 🟢/🔴 알림
 sendOrderFilled(signal)       → 체결 성공 ✅ / 실패 ❌ 알림
 sendError(message)            → 전략 오류 ⚠️ 알림
+sendServiceStarted()          → 🟢 *strategy-service* 시작 (ServiceLifecycleNotifier 위임용)
+sendServiceStopped()          → 🔴 *strategy-service* 종료 (ServiceLifecycleNotifier 위임용)
 (트레일링 스탑/타임 컷 알림은 각 Service에서 직접 호출)
 
 이중 안전장치:
@@ -1035,6 +1092,27 @@ sendError(message)            → 전략 오류 ⚠️ 알림
   ② webhookUrl="PLACEHOLDER" → 경고 로그 출력
   두 조건 모두 통과 시에만 Slack으로 실제 발송
 ```
+
+### `ServiceLifecycleNotifier.java` (strategy-service)
+
+```java
+@Component @RequiredArgsConstructor
+public class ServiceLifecycleNotifier implements ApplicationListener<ApplicationReadyEvent> {
+    private final SlackNotifier slackNotifier;
+
+    @Override
+    public void onApplicationEvent(ApplicationReadyEvent event) {
+        slackNotifier.sendServiceStarted();  // 🟢 strategy-service 시작
+    }
+
+    @EventListener(ContextClosedEvent.class)
+    public void onShutdown() {
+        slackNotifier.sendServiceStopped();  // 🔴 strategy-service 종료
+    }
+}
+```
+
+나머지 4개 서비스(market/order/portfolio/api-gateway)도 동일한 `ServiceLifecycleNotifier`를 가지지만, `SlackNotifier` 없이 `WebClient`를 직접 사용합니다. api-gateway는 Lombok이 없으므로 `@Slf4j` 대신 `LoggerFactory.getLogger()`를 사용합니다.
 
 ### `SignalDto.java`
 
@@ -1073,6 +1151,10 @@ POST /api/strategy/refresh-market-state
 | POST | `/api/strategy/test-slack` | Slack 알림 연결 테스트 |
 | GET | `/api/strategy/market-state` | 현재 시장 상태 조회 |
 | POST | `/api/strategy/refresh-market-state` | 시장 상태 수동 갱신 |
+| GET | `/api/strategy/admin/status` | 관리자 설정 조회 (paused, investAmountKrw, maxPositions) |
+| POST | `/api/strategy/admin/pause` | 매매 긴급 정지 |
+| POST | `/api/strategy/admin/resume` | 매매 재개 |
+| PATCH | `/api/strategy/admin/config` | 투자 설정 변경 (부분 업데이트 지원) |
 
 ---
 
@@ -1101,6 +1183,14 @@ POST /api/strategy/refresh-market-state
 | 발행자 | 토픽 | 소비자 | 목적 |
 |--------|------|--------|------|
 | order-service | `order-events` | portfolio-service | 주문 체결 → 포트폴리오 자동 갱신 |
+
+### 외부 서비스 통신
+
+| 호출자 | 대상 | 목적 |
+|--------|------|------|
+| strategy-service (`SlackNotifier`) | Slack Incoming Webhook | 매매 신호, 체결, 오류, 기동/종료 알림 |
+| market/order/portfolio/api-gateway (`ServiceLifecycleNotifier`) | Slack Incoming Webhook | 서비스 기동/종료 알림 |
+| frontend Vite dev server (`vite.config.js`) | Slack Incoming Webhook | 프론트엔드 기동/종료 알림 |
 
 **HTTP vs Kafka 선택 기준:**
 - **HTTP**: 즉각적인 응답이 필요한 경우 (조회, 주문 실행)
