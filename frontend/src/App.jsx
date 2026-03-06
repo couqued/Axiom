@@ -1,7 +1,5 @@
 import { useState } from 'react'
 import Dashboard from './pages/Dashboard'
-import StockSearch from './pages/StockSearch'
-import OrderForm from './pages/OrderForm'
 import TradeHistory from './pages/TradeHistory'
 import Strategy from './pages/Strategy'
 import Admin from './pages/Admin'
@@ -9,8 +7,6 @@ import './App.css'
 
 const TABS = [
   { id: 'dashboard', label: '대시보드', icon: '📊' },
-  { id: 'search', label: '종목검색', icon: '🔍' },
-  { id: 'order', label: '주문', icon: '💹' },
   { id: 'history', label: '매매내역', icon: '📋' },
   { id: 'strategy', label: '전략', icon: '⚡' },
 ]
@@ -35,8 +31,6 @@ function App() {
 
       <main className="app-content">
         {tab === 'dashboard' && <Dashboard />}
-        {tab === 'search' && <StockSearch />}
-        {tab === 'order' && <OrderForm />}
         {tab === 'history' && <TradeHistory />}
         {tab === 'strategy' && <Strategy liveAdminConfig={liveAdminConfig} />}
       </main>

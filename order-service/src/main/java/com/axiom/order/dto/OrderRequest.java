@@ -16,4 +16,7 @@ public class OrderRequest {
     private OrderType orderType;  // BUY or SELL
     private Integer quantity;
     private BigDecimal price;     // 지정가 (null이면 시장가)
+    private String strategyName;
+    private String marketState;
+    private String closeReason;
 }

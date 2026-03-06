@@ -6,8 +6,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.util.retry.Retry;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Random;
@@ -88,6 +90,8 @@ public class KisMarketApiService {
                 .header("tr_id",     "FHKST01010100")
                 .retrieve()
                 .bodyToMono(Map.class)
+                .retryWhen(Retry.fixedDelay(1, Duration.ofSeconds(1))
+                        .doBeforeRetry(s -> log.warn("[KIS] 현재가 조회 재시도 - ticker: {}", ticker)))
                 .block();
 
         Map<String, String> output = (Map<String, String>) response.get("output");
@@ -96,8 +100,8 @@ public class KisMarketApiService {
         BigDecimal changeAmount = new BigDecimal(output.get("prdy_vrss"));
         BigDecimal changeRate   = new BigDecimal(output.get("prdy_ctrt"));
 
-        // 종목명: bstp_kor_isnm (업종한글종목명) 사용, 없으면 ticker 반환
-        String stockName = output.getOrDefault("bstp_kor_isnm", ticker);
+        // 종목명: hts_kor_isnm (HTS 한글 종목명) 사용, 없으면 ticker 반환
+        String stockName = output.getOrDefault("hts_kor_isnm", ticker);
 
         // 시장경보코드: "00"=정상, "01"=투자주의, "02"=투자경고, "03"=투자위험
         String marketWarnCode = output.getOrDefault("mrkt_warn_cls_code", "00");

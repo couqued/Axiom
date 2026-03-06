@@ -45,6 +45,15 @@ public class TradeOrder {
     @Column(length = 50)
     private String kisOrderId;
 
+    @Column(length = 50)
+    private String strategyName;   // "golden-cross", "rsi-bollinger", "volatility-breakout"
+
+    @Column(length = 20)
+    private String marketState;    // "BULLISH", "SIDEWAYS"
+
+    @Column(length = 30)
+    private String closeReason;    // "SIGNAL", "TRAILING_STOP", "TIME_CUT", "FORCE_EXIT"
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 

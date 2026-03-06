@@ -2,20 +2,29 @@ package com.axiom.strategy.service;
 
 import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.OrderClient;
+import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
+import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.util.TradingCalendar;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import com.axiom.strategy.admin.TimeCutStatusDto;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 타임 컷 서비스.
@@ -33,10 +42,51 @@ public class TimeCutService {
     private final StrategyConfig strategyConfig;
     private final AdminConfigStore adminConfigStore;
     private final OrderClient orderClient;
+    private final PortfolioClient portfolioClient;
     private final SlackNotifier slackNotifier;
 
-    /** ticker → 매수일 (메모리, 재시작 시 초기화) */
+    /** ticker → 매수일 (메모리, 재시작 시 order 이력에서 복구) */
     private final Map<String, LocalDate> buyDates = new ConcurrentHashMap<>();
+
+    /**
+     * 서비스 재시작 후 order-service 이력을 조회하여 buyDates 복구.
+     * 현재 보유 중인 종목 중 적용 전략(rsi-bollinger 등)으로 매수된 것만 복구.
+     */
+    @PostConstruct
+    public void initFromOrders() {
+        StrategyConfig.TimeCutConfig config = strategyConfig.getTimeCut();
+        if (!config.isEnabled()) return;
+
+        try {
+            List<PortfolioItemDto> positions = portfolioClient.getPositions();
+            if (positions.isEmpty()) return;
+
+            Set<String> heldTickers = positions.stream()
+                    .map(PortfolioItemDto::getTicker)
+                    .collect(Collectors.toSet());
+
+            List<OrderSummaryDto> orders = orderClient.getFilledOrders();
+
+            for (String ticker : heldTickers) {
+                orders.stream()
+                        .filter(o -> ticker.equals(o.getTicker()))
+                        .filter(o -> "BUY".equals(o.getOrderType()))
+                        .filter(o -> "FILLED".equals(o.getStatus()))
+                        .filter(o -> config.getApplicableStrategies().contains(o.getStrategyName()))
+                        .max(Comparator.comparing(OrderSummaryDto::getCreatedAt))
+                        .ifPresent(o -> {
+                            LocalDate buyDate = o.getCreatedAt().toLocalDate();
+                            buyDates.putIfAbsent(ticker, buyDate);
+                            log.info("[TimeCut] 재시작 복구 — ticker: {}, buyDate: {}", ticker, buyDate);
+                        });
+            }
+            if (!buyDates.isEmpty()) {
+                log.info("[TimeCut] 재시작 복구 완료 — {}개 종목", buyDates.size());
+            }
+        } catch (Exception e) {
+            log.warn("[TimeCut] 재시작 복구 실패: {}", e.getMessage());
+        }
+    }
 
     /**
      * RSI+볼린저 전략 BUY 신호 발생 시 매수일을 기록한다.
@@ -95,6 +145,17 @@ public class TimeCutService {
         }
     }
 
+    public Map<String, TimeCutStatusDto> getStatus() {
+        int maxDays = adminConfigStore.getTimeCutDays();
+        Map<String, TimeCutStatusDto> result = new HashMap<>();
+        buyDates.forEach((ticker, buyDate) -> {
+            int elapsed   = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now());
+            int remaining = Math.max(0, maxDays - elapsed);
+            result.put(ticker, new TimeCutStatusDto(buyDate, elapsed, remaining));
+        });
+        return result;
+    }
+
     private void executeSell(String ticker, BigDecimal currentPrice,
                              List<PortfolioItemDto> positions, int elapsed, int maxDays) {
         positions.stream()
@@ -105,6 +166,7 @@ public class TimeCutService {
                             .ticker(ticker)
                             .quantity(position.getQuantity())
                             .price(currentPrice)
+                            .closeReason("TIME_CUT")
                             .build();
 
                     boolean success = orderClient.sell(sellOrder);

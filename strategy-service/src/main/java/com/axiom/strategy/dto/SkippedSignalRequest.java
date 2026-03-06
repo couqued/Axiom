@@ -7,12 +7,11 @@ import java.math.BigDecimal;
 
 @Getter
 @Builder
-public class OrderRequest {
+public class SkippedSignalRequest {
     private String ticker;
     private String stockName;
-    private Integer quantity;
     private BigDecimal price;
     private String strategyName;
     private String marketState;
-    private String closeReason;
+    private String skipReason;  // BUDGET_INSUFFICIENT | MAX_POSITIONS | MARKET_WARN
 }

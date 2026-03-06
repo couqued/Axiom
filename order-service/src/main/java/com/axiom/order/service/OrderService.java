@@ -37,6 +37,9 @@ public class OrderService {
                 .price(price)
                 .totalAmount(totalAmount)
                 .status(TradeOrder.OrderStatus.PENDING)
+                .strategyName(request.getStrategyName())
+                .marketState(request.getMarketState())
+                .closeReason(request.getCloseReason())
                 .build();
 
         order = orderRepository.save(order);

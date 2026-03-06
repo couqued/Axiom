@@ -19,35 +19,24 @@ public class SlackNotifier {
     private boolean enabled;
 
     /**
-     * 매수/매도 신호 발생 알림.
+     * 신호 발생 + 주문 결과를 단일 메시지로 발송.
+     * success=true: ✅ 체결, false: ❌ KIS 주문 실패
      */
-    public void sendSignal(SignalDto signal) {
-        String emoji  = signal.getAction() == SignalDto.Action.BUY ? "🟢" : "🔴";
-        String action = signal.getAction() == SignalDto.Action.BUY ? "매수" : "매도";
+    public void sendTradeResult(SignalDto signal, boolean success) {
+        boolean isBuy = signal.getAction() == SignalDto.Action.BUY;
+        String actionKo = isBuy ? "매수" : "매도";
+        String resultEmoji = success ? "✅" : "❌";
+        String resultText  = success ? "체결" : "주문 실패";
         String text = String.format(
-                "%s *[%s 신호]* %s\n" +
+                "%s *[%s %s]* %s\n" +
                 "> 전략: %s\n" +
                 "> 가격: %s원\n" +
                 "> 사유: %s",
-                emoji, action, formatStock(signal.getStockName(), signal.getTicker()),
+                resultEmoji, actionKo, resultText,
+                formatStock(signal.getStockName(), signal.getTicker()),
                 signal.getStrategyName(),
                 formatPrice(signal.getPrice()),
                 signal.getReason()
-        );
-        send(text);
-    }
-
-    /**
-     * 주문 체결 완료 알림.
-     */
-    public void sendOrderFilled(SignalDto signal, boolean success) {
-        String status = success ? "✅ 주문 체결" : "❌ 주문 실패";
-        String action = signal.getAction() == SignalDto.Action.BUY ? "매수" : "매도";
-        String text = String.format(
-                "%s %s %s 완료\n> 전략: %s | 가격: %s원",
-                status, formatStock(signal.getStockName(), signal.getTicker()), action,
-                signal.getStrategyName(),
-                formatPrice(signal.getPrice())
         );
         send(text);
     }

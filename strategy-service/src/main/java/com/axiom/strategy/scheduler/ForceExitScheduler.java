@@ -60,6 +60,7 @@ public class ForceExitScheduler {
                     .ticker(position.getTicker())
                     .quantity(position.getQuantity())
                     .price(position.getAvgPrice()) // 시장가 매도 (평균단가 참조)
+                    .closeReason("FORCE_EXIT")
                     .build();
 
             boolean success = orderClient.sell(sellOrder);

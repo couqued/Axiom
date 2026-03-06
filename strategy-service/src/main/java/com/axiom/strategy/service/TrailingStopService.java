@@ -2,16 +2,21 @@ package com.axiom.strategy.service;
 
 import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.OrderClient;
+import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import com.axiom.strategy.admin.TrailingStopStatusDto;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,10 +38,32 @@ public class TrailingStopService {
     private final StrategyConfig strategyConfig;
     private final AdminConfigStore adminConfigStore;
     private final OrderClient orderClient;
+    private final PortfolioClient portfolioClient;
     private final SlackNotifier slackNotifier;
 
-    /** ticker → 고점 가격 (메모리, 재시작 시 초기화) */
+    /** ticker → 고점 가격 (메모리, 재시작 시 portfolio avgPrice로 초기화) */
     private final Map<String, BigDecimal> peakPrices = new ConcurrentHashMap<>();
+
+    /**
+     * 서비스 재시작 후 보유 포지션의 avgPrice를 고점 초기값으로 복구.
+     * 다음 전략 실행 시 실제 현재가로 자동 갱신됨.
+     */
+    @PostConstruct
+    public void initFromPortfolio() {
+        try {
+            List<PortfolioItemDto> positions = portfolioClient.getPositions();
+            for (PortfolioItemDto p : positions) {
+                if (p.getAvgPrice() != null) {
+                    peakPrices.putIfAbsent(p.getTicker(), p.getAvgPrice());
+                }
+            }
+            if (!positions.isEmpty()) {
+                log.info("[TrailingStop] 재시작 복구 — {}개 종목 avgPrice로 초기화", positions.size());
+            }
+        } catch (Exception e) {
+            log.warn("[TrailingStop] 재시작 복구 실패 (다음 전략 실행 시 자동 복구): {}", e.getMessage());
+        }
+    }
 
     /**
      * 종목의 현재가를 확인하여 트레일링 스탑 조건을 체크한다.
@@ -78,6 +105,17 @@ public class TrailingStopService {
         }
     }
 
+    public Map<String, TrailingStopStatusDto> getStatus() {
+        double stopPct = adminConfigStore.getTrailingStopPct();
+        Map<String, TrailingStopStatusDto> result = new HashMap<>();
+        peakPrices.forEach((ticker, peak) -> {
+            BigDecimal stopPrice = peak.multiply(BigDecimal.valueOf(1.0 - stopPct / 100.0))
+                    .setScale(0, RoundingMode.HALF_UP);
+            result.put(ticker, new TrailingStopStatusDto(peak, stopPrice));
+        });
+        return result;
+    }
+
     private void executeSell(String ticker, BigDecimal currentPrice,
                              List<PortfolioItemDto> positions, double stopPercent) {
         positions.stream()
@@ -88,6 +126,7 @@ public class TrailingStopService {
                             .ticker(ticker)
                             .quantity(position.getQuantity())
                             .price(currentPrice)
+                            .closeReason("TRAILING_STOP")
                             .build();
 
                     boolean success = orderClient.sell(sellOrder);

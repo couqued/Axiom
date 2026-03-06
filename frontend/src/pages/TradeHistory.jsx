@@ -1,24 +1,40 @@
 import { useState, useEffect } from 'react'
 import { getOrders } from '../api/stockApi'
 
-const STATUS_KO = { PENDING: '대기', FILLED: '체결', CANCELLED: '취소', FAILED: '실패' }
+const CLOSE_REASON_KO = {
+  SIGNAL: '전략 신호',
+  TRAILING_STOP: '트레일링 스탑',
+  TIME_CUT: '타임컷',
+  FORCE_EXIT: '강제청산 (15:20)',
+}
+const STRATEGY_KO = {
+  'golden-cross': '골든크로스',
+  'rsi-bollinger': 'RSI+볼린저',
+  'volatility-breakout': '변동성 돌파',
+}
+const MARKET_KO = { BULLISH: '상승장', SIDEWAYS: '횡보장' }
+
+function formatDate(dt) {
+  if (!dt) return ''
+  const d = new Date(dt)
+  return d.toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' }).replace('. ', '.').replace('.', '') +
+    ' ' + d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
 
 export default function TradeHistory() {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true)
     getOrders()
       .then(setOrders)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [])
-
-  const refresh = () => {
-    setLoading(true)
-    getOrders().then(setOrders).catch(e => setError(e.message)).finally(() => setLoading(false))
   }
+
+  useEffect(() => { load() }, [])
 
   if (loading) return <div className="loading">로딩 중...</div>
   if (error) return <div className="error">오류: {error}</div>
@@ -27,45 +43,53 @@ export default function TradeHistory() {
     <div className="page">
       <div className="page-header">
         <h2>매매 내역</h2>
-        <button className="refresh-btn" onClick={refresh}>새로고침</button>
+        <button className="refresh-btn" onClick={load}>새로고침</button>
       </div>
 
       {orders.length === 0 ? (
-        <p className="empty">주문 내역이 없습니다.</p>
+        <p className="empty">매매 내역이 없습니다.</p>
       ) : (
-        <table className="stock-table">
-          <thead>
-            <tr>
-              <th>일시</th>
-              <th>종목</th>
-              <th>구분</th>
-              <th>수량</th>
-              <th>단가</th>
-              <th>금액</th>
-              <th>상태</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map(o => (
-              <tr key={o.id}>
-                <td>{new Date(o.createdAt).toLocaleString('ko-KR')}</td>
-                <td>
-                  <div className="stock-name">{o.stockName}</div>
-                  <div className="ticker">{o.ticker}</div>
-                </td>
-                <td>
-                  <span className={`order-type ${o.orderType === 'BUY' ? 'buy' : 'sell'}`}>
-                    {o.orderType === 'BUY' ? '매수' : '매도'}
+        <div className="history-list">
+          {orders.map(o => {
+            const isBuy = o.orderType === 'BUY'
+            const strategyLabel = o.strategyName ? STRATEGY_KO[o.strategyName] ?? o.strategyName : null
+            const marketLabel = o.marketState ? MARKET_KO[o.marketState] ?? o.marketState : null
+            const closeLabel = o.closeReason ? CLOSE_REASON_KO[o.closeReason] ?? o.closeReason : null
+
+            return (
+              <div key={o.id} className={`history-card ${isBuy ? 'buy' : 'sell'}`}>
+                <div className="history-card-header">
+                  <span className={`order-type ${isBuy ? 'buy' : 'sell'}`}>
+                    {isBuy ? '매수' : '매도'}
                   </span>
-                </td>
-                <td>{o.quantity}주</td>
-                <td>{Number(o.price).toLocaleString()}원</td>
-                <td>{Number(o.totalAmount).toLocaleString()}원</td>
-                <td>{STATUS_KO[o.status] || o.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <span className="history-date">{formatDate(o.createdAt)}</span>
+                  <span className="history-status">{o.status === 'FILLED' ? '●체결' : o.status}</span>
+                </div>
+                <div className="history-stock">
+                  <span className="stock-name">{o.stockName}</span>
+                  <span className="ticker">{o.ticker}</span>
+                </div>
+                <div className="history-amount">
+                  {o.quantity}주 × {Number(o.price).toLocaleString()}원 ={' '}
+                  <strong>{Number(o.totalAmount).toLocaleString()}원</strong>
+                </div>
+                {(strategyLabel || closeLabel || marketLabel) && (
+                  <div className="history-meta">
+                    {isBuy && strategyLabel && (
+                      <span className="history-tag strategy">{strategyLabel}</span>
+                    )}
+                    {!isBuy && closeLabel && (
+                      <span className="history-tag close">{closeLabel}</span>
+                    )}
+                    {marketLabel && (
+                      <span className="history-tag market">{marketLabel}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )

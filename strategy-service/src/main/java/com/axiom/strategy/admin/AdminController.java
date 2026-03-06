@@ -1,8 +1,12 @@
 package com.axiom.strategy.admin;
 
+import com.axiom.strategy.service.TimeCutService;
+import com.axiom.strategy.service.TrailingStopService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/strategy/admin")
@@ -10,6 +14,8 @@ import org.springframework.web.bind.annotation.*;
 public class AdminController {
 
     private final AdminConfigStore adminConfigStore;
+    private final TrailingStopService trailingStopService;
+    private final TimeCutService timeCutService;
 
     /** 현재 관리자 설정 상태 조회 */
     @GetMapping("/status")
@@ -40,6 +46,18 @@ public class AdminController {
         int    newTimeCut  = dto.timeCutDays()     != null ? dto.timeCutDays()     : adminConfigStore.getTimeCutDays();
         adminConfigStore.setConfig(newInvest, newMaxPos, newTsStop, newTimeCut);
         return ResponseEntity.ok(currentStatus());
+    }
+
+    /** 트레일링 스탑 현황 조회 — ticker별 고점/기준가 */
+    @GetMapping("/trailing-stop-status")
+    public ResponseEntity<Map<String, TrailingStopStatusDto>> getTrailingStopStatus() {
+        return ResponseEntity.ok(trailingStopService.getStatus());
+    }
+
+    /** 타임 컷 현황 조회 — ticker별 매수일/경과/남은 거래일 */
+    @GetMapping("/time-cut-status")
+    public ResponseEntity<Map<String, TimeCutStatusDto>> getTimeCutStatus() {
+        return ResponseEntity.ok(timeCutService.getStatus());
     }
 
     private AdminStatusDto currentStatus() {

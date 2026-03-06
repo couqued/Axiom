@@ -626,3 +626,328 @@ body {
 
 .order-type.buy { background: #c0392b; color: #fff; }
 .order-type.sell { background: #1a6eb5; color: #fff; }
+
+/* ── 대시보드 보유 종목 카드 ─────────────────────────────────────────── */
+
+.holding-list { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+
+.holding-card {
+  background: #1a1d27;
+  border-radius: 12px;
+  padding: 14px;
+  border: 1px solid #2d2d3a;
+}
+
+.holding-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.holding-name { font-size: 15px; font-weight: 600; color: #e0e0e0; }
+.holding-ticker { font-size: 11px; color: #666; }
+
+.holding-row { font-size: 13px; color: #aaa; margin-bottom: 6px; }
+.holding-meta { font-size: 13px; color: #aaa; }
+
+.holding-pnl {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.holding-rate { font-size: 13px; }
+
+.holding-risk {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-top: 4px;
+}
+
+.holding-risk.ts {
+  background: #0d1a2d;
+  color: #7dccff;
+  border: 1px solid #1a3d6e;
+}
+
+.holding-risk.tc {
+  background: #1f1a09;
+  color: #ffd966;
+  border: 1px solid #7a6419;
+}
+
+.risk-remain { color: #4fa3ff; }
+.risk-note { color: #555; font-size: 11px; }
+
+.holding-empty {
+  background: #1a1d27;
+  border-radius: 12px;
+  border: 1px solid #2d2d3a;
+  overflow: hidden;
+}
+
+.holding-empty-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1.2fr 1fr 1.2fr;
+  gap: 4px;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: #555;
+  border-bottom: 1px solid #2d2d3a;
+}
+
+/* ── 매매내역 카드 ────────────────────────────────────────────────────── */
+
+.history-list { display: flex; flex-direction: column; gap: 10px; }
+
+.history-card {
+  background: #1a1d27;
+  border-radius: 12px;
+  padding: 14px;
+  border-left: 3px solid;
+}
+
+.history-card.buy { border-color: #c0392b; }
+.history-card.sell { border-color: #1a6eb5; }
+
+.history-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.history-date { font-size: 12px; color: #888; flex: 1; }
+.history-status { font-size: 11px; color: #7dffaa; }
+
+.history-stock {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.history-amount {
+  font-size: 13px;
+  color: #aaa;
+  margin-bottom: 8px;
+}
+
+.history-amount strong { color: #e0e0e0; }
+
+.history-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.history-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.history-tag.strategy { background: #0a1f12; color: #7dffaa; border: 1px solid #1d6e3a; }
+.history-tag.close { background: #2d1414; color: #ff8080; border: 1px solid #6e1d1d; }
+.history-tag.market { background: #2d2d3a; color: #aaa; border: 1px solid #3d3d4a; }
+
+/* ── 전략탭 포지션 상세 카드 ──────────────────────────────────────────── */
+
+.position-detail-list { display: flex; flex-direction: column; gap: 10px; }
+
+.position-detail-card {
+  background: #0f1117;
+  border-radius: 10px;
+  padding: 12px;
+  border: 1px solid #2d2d3a;
+}
+
+.position-detail-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.position-detail-row {
+  font-size: 13px;
+  color: #ccc;
+  margin-bottom: 4px;
+}
+
+.position-detail-row.secondary { color: #888; font-size: 12px; }
+
+.position-risk {
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  margin-top: 4px;
+}
+
+.position-risk.ts {
+  background: #0d1a2d;
+  color: #7dccff;
+  border: 1px solid #1a3d6e;
+}
+
+.position-risk.tc {
+  background: #1f1a09;
+  color: #ffd966;
+  border: 1px solid #7a6419;
+}
+
+/* ── 투자 스킵 종목 ──────────────────────────────────────────────────── */
+
+.section-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #888;
+  margin-left: 6px;
+}
+
+.skipped-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.skipped-card h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #ccc;
+}
+
+.skipped-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skipped-date-group {
+  background: #111128;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.skipped-date-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #0d0d22;
+  border-bottom: 1px solid #2a2a4a;
+}
+
+.skipped-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: #aaa;
+}
+
+.skipped-market-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #1e3a5f;
+  color: #7ec8f0;
+}
+
+.skipped-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.skipped-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 10px;
+  border-bottom: 1px solid #1e1e3a;
+  gap: 8px;
+}
+
+.skipped-item:last-child {
+  border-bottom: none;
+}
+
+.skipped-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.skipped-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skipped-ticker {
+  font-size: 11px;
+  color: #666;
+}
+
+.skipped-item-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.skipped-reason-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.reason-BUDGET_INSUFFICIENT {
+  background: #3a1a1a;
+  color: #f08080;
+  border: 1px solid #6a2a2a;
+}
+
+.reason-MAX_POSITIONS {
+  background: #2a2a1a;
+  color: #d4a017;
+  border: 1px solid #5a4a10;
+}
+
+.reason-MARKET_WARN {
+  background: #1a1a3a;
+  color: #9090f0;
+  border: 1px solid #3a3a7a;
+}
+
+.skipped-strategy {
+  font-size: 11px;
+  color: #888;
+  background: #1e1e1e;
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+
+.skipped-price {
+  font-size: 11px;
+  color: #aaa;
+}
+
+.skipped-count {
+  font-size: 11px;
+  color: #888;
+  background: #222;
+  padding: 1px 5px;
+  border-radius: 8px;
+}

@@ -21,6 +21,9 @@ public class OrderResponse {
     private BigDecimal totalAmount;
     private OrderStatus status;
     private String kisOrderId;
+    private String strategyName;
+    private String marketState;
+    private String closeReason;
     private LocalDateTime createdAt;
     private LocalDateTime filledAt;
     private boolean mock;
@@ -36,6 +39,9 @@ public class OrderResponse {
                 .totalAmount(order.getTotalAmount())
                 .status(order.getStatus())
                 .kisOrderId(order.getKisOrderId())
+                .strategyName(order.getStrategyName())
+                .marketState(order.getMarketState())
+                .closeReason(order.getCloseReason())
                 .createdAt(order.getCreatedAt())
                 .filledAt(order.getFilledAt())
                 .build();

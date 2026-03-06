@@ -9,6 +9,7 @@ import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.SignalDto;
+import com.axiom.strategy.dto.SkippedSignalRequest;
 import com.axiom.strategy.dto.StockPriceDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.service.MarketState;
@@ -90,7 +91,11 @@ public class StrategyEngine {
 
         for (String ticker : tickers) {
             try {
-                runForTicker(ticker, candleDays, activeStrategyNames, positions, boughtThisRun, soldThisRun, maxPositions);
+                runForTicker(ticker, candleDays, activeStrategyNames, positions, boughtThisRun, soldThisRun, maxPositions, marketState);
+                Thread.sleep(200); // KIS API Rate Limit 대응 (초당 5회 이하)
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
             } catch (Exception e) {
                 log.error("[Engine] 종목 처리 오류 — ticker: {}, error: {}", ticker, e.getMessage());
             }
@@ -106,7 +111,8 @@ public class StrategyEngine {
                                List<PortfolioItemDto> positions,
                                int[] boughtThisRun,
                                int[] soldThisRun,
-                               int maxPositions) {
+                               int maxPositions,
+                               MarketState marketState) {
         // 현재가 조회 (시가, 고가, 저가, 현재가 포함)
         StockPriceDto priceData = marketClient.getCurrentPrice(ticker);
         if (priceData == null || priceData.getCurrentPrice() == null) {
@@ -155,6 +161,7 @@ public class StrategyEngine {
                         if (!priceData.isSafe()) {
                             log.warn("[Engine] 시장경보 종목 — BUY 스킵 ticker: {}, warnCode: {}",
                                     ticker, priceData.getMarketWarnCode());
+                            recordSkipped(signal, marketState, "MARKET_WARN");
                             continue;
                         }
                         // ② 이미 보유 중이면 BUY 스킵
@@ -169,11 +176,12 @@ public class StrategyEngine {
                         if (effectivePositions >= maxPositions) {
                             log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
                                     effectivePositions, maxPositions, ticker);
+                            recordSkipped(signal, marketState, "MAX_POSITIONS");
                             continue;
                         }
                     }
 
-                    boolean traded = handleSignal(signal, positions);
+                    boolean traded = handleSignal(signal, positions, marketState.name());
                     if (traded && signal.getAction() == SignalDto.Action.BUY) {
                         boughtThisRun[0]++;
                     } else if (traded && signal.getAction() == SignalDto.Action.SELL) {
@@ -200,7 +208,7 @@ public class StrategyEngine {
      *
      * @return 주문 성공 여부 (BUY 성공 시 boughtThisRun 카운트 증가용)
      */
-    private boolean handleSignal(SignalDto signal, List<PortfolioItemDto> positions) {
+    private boolean handleSignal(SignalDto signal, List<PortfolioItemDto> positions, String marketStateName) {
         // ── 수량 결정 (먼저 검증 — 실행 불가 시 Slack 발송 없이 스킵) ──────
         int quantity;
         if (signal.getAction() == SignalDto.Action.BUY) {
@@ -209,9 +217,14 @@ public class StrategyEngine {
             if (quantity < 1) {
                 log.warn("[Engine] 투자금액 부족 — BUY 스킵 ticker: {}, price: {}, budget: {}원",
                         signal.getTicker(), signal.getPrice(), investKrw);
-                slackNotifier.sendError(String.format(
-                        "투자금액 부족 — ticker=%s, price=%.0f, budget=%d원",
-                        signal.getTicker(), signal.getPrice().doubleValue(), investKrw));
+                orderClient.recordSkipped(SkippedSignalRequest.builder()
+                        .ticker(signal.getTicker())
+                        .stockName(signal.getStockName())
+                        .price(signal.getPrice())
+                        .strategyName(signal.getStrategyName())
+                        .marketState(marketStateName)
+                        .skipReason("BUDGET_INSUFFICIENT")
+                        .build());
                 return false;
             }
         } else { // SELL → portfolio에서 보유 수량 전량 조회
@@ -225,14 +238,15 @@ public class StrategyEngine {
             quantity = position.get().getQuantity();
         }
 
-        // ── 신호 알림 (실제 주문 실행 직전에만 발송) ──────────────────────
-        slackNotifier.sendSignal(signal);
-
         // ── 주문 실행 ──────────────────────────────────────────────────────
         OrderRequest orderRequest = OrderRequest.builder()
                 .ticker(signal.getTicker())
+                .stockName(signal.getStockName())
                 .quantity(quantity)
                 .price(signal.getPrice())
+                .strategyName(signal.getStrategyName())
+                .marketState(marketStateName)
+                .closeReason("SIGNAL")
                 .build();
 
         boolean success = switch (signal.getAction()) {
@@ -249,7 +263,7 @@ public class StrategyEngine {
             default -> false;
         };
 
-        slackNotifier.sendOrderFilled(signal, success);
+        slackNotifier.sendTradeResult(signal, success);
         return success;
     }
 
@@ -277,5 +291,17 @@ public class StrategyEngine {
                     .filter(s -> List.of("rsi-bollinger").contains(s))
                     .toList();
         };
+    }
+
+    /** 스킵된 BUY 신호를 order-service에 비동기 기록 (실패 시 경고 로그만) */
+    private void recordSkipped(SignalDto signal, MarketState marketState, String skipReason) {
+        orderClient.recordSkipped(SkippedSignalRequest.builder()
+                .ticker(signal.getTicker())
+                .stockName(signal.getStockName())
+                .price(signal.getPrice())
+                .strategyName(signal.getStrategyName())
+                .marketState(marketState.name())
+                .skipReason(skipReason)
+                .build());
     }
 }

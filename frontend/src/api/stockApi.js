@@ -65,3 +65,15 @@ export const resumeTrading = () =>
 // 관리자 — 투자 설정 변경
 export const updateAdminConfig = (body) =>
   request('/api/strategy/admin/config', { method: 'PATCH', body: JSON.stringify(body) })
+
+// 트레일링 스탑 현황 — { ticker: { peakPrice, stopPrice } }
+export const getTrailingStopStatus = () =>
+  request('/api/strategy/admin/trailing-stop-status')
+
+// 타임 컷 현황 — { ticker: { buyDate, elapsed, remaining } }
+export const getTimeCutStatus = () =>
+  request('/api/strategy/admin/time-cut-status')
+
+// 투자 스킵 종목 목록 (최근 N일, 기본 7일)
+export const getSkippedSignals = (days = 7) =>
+  request(`/api/orders/skipped?days=${days}`)
