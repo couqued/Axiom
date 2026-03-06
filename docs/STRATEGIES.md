@@ -180,17 +180,52 @@ Range  = yesterday.highPrice - yesterday.lowPrice  (전일 변동폭)
 
 `ConcurrentHashMap<String, LocalDate> todayBought`에 매수 날짜를 저장합니다. 당일 이미 매수한 종목은 재진입하지 않습니다.
 
+`todayBought`는 `evaluate()` 내부가 아닌 **주문 체결 확정 후** `markBought(ticker)`를 통해 등록합니다. BUY 신호를 발생시켰더라도 StrategyEngine의 BUY 가드(maxPositions 등)에 의해 스킵된 경우에는 등록되지 않습니다.
+
+### 재시작 복구 (todayBought)
+
+서비스 재시작 시 `todayBought`가 초기화되면 15:20 ForceExit가 오버나이트 종목을 인식하지 못합니다. 이를 방지하기 위해 `MarketStateScheduler.@PostConstruct`에서 order-service 이력을 기반으로 복구합니다.
+
+```
+initOnStartup() (@PostConstruct)
+  → orderClient.getFilledOrders() 조회
+  → 오늘 날짜 + volatility-breakout + BUY + FILLED 건
+  → todayBought.putIfAbsent(ticker, buyDate)
+```
+
 ### 강제 청산 (ForceExitScheduler)
 
-매일 **15:20**에 `ForceExitScheduler`가 실행되어 변동성 돌파로 당일 매수한 포지션을 모두 강제 청산합니다. 오버나이트 리스크를 방지합니다.
+`ForceExitScheduler`는 두 가지 청산 스케줄을 실행합니다.
+
+#### ① 당일 마감 청산 (15:20)
+
+매일 **15:20**에 변동성 돌파로 당일 매수한 포지션을 강제 청산합니다.
 
 ```
-ForceExitScheduler (cron: 0 20 15 * * MON-FRI, zone: Asia/Seoul)
-  → VolatilityBreakoutStrategy.getTodayBought() 조회
+forceExit() — cron: 0 20 15 * * MON-FRI
+  → todayBought에서 오늘 날짜와 일치하는 종목 추출
   → portfolio-service에서 실제 보유 여부 확인
-  → 보유 중이면 order-service에 SELL 주문
-  → Slack 알림 발송
+  → 보유 중이면 SELL 주문 + Slack 알림
+  → 처리 완료 후 todayBought에서 제거
 ```
+
+#### ② 오버나이트 미청산 익일 청산 (09:05)
+
+서비스 재시작 등으로 15:20 청산이 누락된 경우, 다음 거래일 **09:05**에 보완 청산합니다.
+
+```
+exitOvernightPositions() — cron: 0 5 9 * * MON-FRI
+  ① todayBought에서 오늘 날짜가 아닌 항목 추출 (오버나이트 후보)
+  ② order-service 이력 검증
+     - ticker 일치 + strategyName = "volatility-breakout"
+     - orderType = BUY + status = FILLED
+     - 매수일 = todayBought에 기록된 날짜
+  ③ portfolio-service에서 실제 보유 확인
+  ④ 검증 통과 종목만 SELL 주문 + Slack 알림
+  ⑤ 처리 완료 후 todayBought에서 제거
+```
+
+> 09:00 정각은 시초가 호가 스프레드가 넓어 체결이 불안정하므로 09:05에 실행합니다.
 
 ### K 값 (0.5)의 의미
 
@@ -360,9 +395,10 @@ GET /api/strategy/admin/time-cut-status
 |------|--------|------|
 | `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 캐싱 |
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 |
+| `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략 검증 포함) |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
 | `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) |
-| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 강제 청산 |
+| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 |
 | `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작

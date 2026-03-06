@@ -648,6 +648,7 @@ body {
 .holding-name { font-size: 15px; font-weight: 600; color: #e0e0e0; }
 .holding-ticker { font-size: 11px; color: #666; }
 
+.holding-tags { display: flex; gap: 6px; margin-bottom: 8px; }
 .holding-row { font-size: 13px; color: #aaa; margin-bottom: 6px; }
 .holding-meta { font-size: 13px; color: #aaa; }
 

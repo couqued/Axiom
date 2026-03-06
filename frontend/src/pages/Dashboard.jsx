@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getPortfolio, getBalance, getStockPrice, getTrailingStopStatus, getTimeCutStatus } from '../api/stockApi'
+import { getPortfolio, getBalance, getStockPrice, getTrailingStopStatus, getTimeCutStatus, getOrders } from '../api/stockApi'
 
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState([])
@@ -7,8 +7,16 @@ export default function Dashboard() {
   const [prices, setPrices] = useState({})         // { ticker: currentPrice }
   const [tsStatus, setTsStatus] = useState({})     // { ticker: { peakPrice, stopPrice } }
   const [tcStatus, setTcStatus] = useState({})     // { ticker: { buyDate, elapsed, remaining } }
+  const [buyInfo, setBuyInfo] = useState({})        // { ticker: { strategyName, marketState } }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  const STRATEGY_LABEL = {
+    'volatility-breakout': '변동성 돌파',
+    'golden-cross': '골든크로스',
+    'rsi-bollinger': 'RSI+볼린저',
+  }
+  const MARKET_LABEL = { BULLISH: '상승장', SIDEWAYS: '횡보장' }
 
   useEffect(() => {
     setLoading(true)
@@ -17,12 +25,22 @@ export default function Dashboard() {
       getBalance(),
       getTrailingStopStatus().catch(() => ({})),  // 실패해도 빈 객체로 처리
       getTimeCutStatus().catch(() => ({})),        // 실패해도 빈 객체로 처리
+      getOrders().catch(() => []),                 // 매수 전략/시장상태 조회용
     ])
-      .then(([p, b, ts, tc]) => {
+      .then(([p, b, ts, tc, orders]) => {
         setPortfolio(p)
         setBalance(b)
         setTsStatus(ts)
         setTcStatus(tc)
+        // 보유 종목별 가장 최근 FILLED BUY 주문에서 전략명/시장상태 추출
+        const info = {}
+        p.forEach(item => {
+          const buyOrder = orders
+            .filter(o => o.ticker === item.ticker && o.orderType === 'BUY' && o.status === 'FILLED')
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]
+          if (buyOrder) info[item.ticker] = { strategyName: buyOrder.strategyName, marketState: buyOrder.marketState }
+        })
+        setBuyInfo(info)
         // 보유 종목별 현재가 병렬 조회
         if (p.length > 0) {
           return Promise.all(p.map(item => getStockPrice(item.ticker).catch(() => null)))
@@ -94,6 +112,7 @@ export default function Dashboard() {
             const pnlRate = currentPrice != null ? ((currentPrice - avgPrice) / avgPrice * 100) : null
             const ts = tsStatus[item.ticker]
             const tc = tcStatus[item.ticker]
+            const bi = buyInfo[item.ticker]
 
             // 트레일링 스탑 남은 금액/% (현재가 있을 때만)
             let remainingAmt = null
@@ -110,6 +129,18 @@ export default function Dashboard() {
                   <span className="holding-name">{item.stockName}</span>
                   <span className="holding-ticker">{item.ticker}</span>
                 </div>
+                {bi && (
+                  <div className="holding-tags">
+                    <span className="history-tag strategy">
+                      {STRATEGY_LABEL[bi.strategyName] ?? bi.strategyName}
+                    </span>
+                    {bi.marketState && (
+                      <span className="history-tag market">
+                        {MARKET_LABEL[bi.marketState] ?? bi.marketState}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="holding-row">
                   <span className="holding-meta">
                     {qty}주 · 평균 {avgPrice.toLocaleString()}원

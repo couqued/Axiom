@@ -774,9 +774,9 @@ strategy-service/
     │   ├── engine/StrategyEngine.java          ← 전략 실행 총괄 + 시장 상태 필터링
     │   ├── scheduler/
     │   │   ├── StrategyScheduler.java          ← 평일 09:05~15:20, 5분 주기
-    │   │   ├── MarketStateScheduler.java       ← 평일 08:30, 시장 상태 갱신
+    │   │   ├── MarketStateScheduler.java       ← 기동 시 @PostConstruct + 평일 08:30 감시 종목/시장상태 갱신
     │   │   ├── TrailingStopScheduler.java      ← 평일 09:00~15:20, 1분 주기 트레일링 스탑 체크
-    │   │   └── ForceExitScheduler.java         ← 평일 15:20, 변동성 돌파 강제 청산
+    │   │   └── ForceExitScheduler.java         ← 평일 09:05 오버나이트 청산 + 평일 15:20 당일 강제 청산
     │   ├── service/
     │   │   ├── MarketStateService.java         ← 코스피 MA20 → BULLISH/SIDEWAYS 판별
     │   │   ├── TrailingStopService.java        ← 트레일링 스탑 (고점 -7%)
@@ -947,6 +947,8 @@ minimumCandles() = 3개
 
 todayBought: ConcurrentHashMap<String, LocalDate>
   매수 시 날짜 기록 → 당일 중복 매수 방지
+  markBought(ticker): evaluate() 내부가 아닌 주문 체결 확정 후 StrategyEngine에서 호출
+  restoreFromOrders(orders): @PostConstruct 복구 — 오늘 volatility-breakout FILLED BUY 이력으로 재등록
 ```
 
 ### `RsiBollingerStrategy.java`
@@ -1037,10 +1039,12 @@ public void run() {
 | Cron | 클래스 | 역할 |
 |------|--------|------|
 | `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 갱신 |
+| `@PostConstruct` | `MarketStateScheduler` | ① watchTickers 즉시 로드 (yml fallback 방지)<br>② todayBought 복구 (오늘 volatility-breakout FILLED BUY 이력 기반) |
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` | ① market-service에서 감시 종목 목록 조회 → watchTickers 갱신<br>② 코스피 MA20 → 시장 상태 판별 |
+| `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략·이력 검증 포함) |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
 | `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) |
-| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 강제 청산 |
+| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 강제 청산 |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작
 
@@ -1129,7 +1133,7 @@ sendTimeCut(ticker, stockName, currentPrice, elapsed, maxDays, success)
   → ⏱️ *[전략 실행 | 타임컷]* — N거래일 경과 강제 매도
 
 sendForceExit(ticker, stockName, quantity, price, success)
-  → 🔔 *[전략 실행 | 마감청산]* — 변동성 돌파 오버나이트 방지 (15:20)
+  → 🔔 *[전략 실행 | 마감청산]* — 변동성 돌파 오버나이트 방지 (15:20 당일 청산 / 09:05 익일 청산 공용)
 
 sendError(message)            → ⚠️ *[전략 오류]* 알림
 sendServiceStarted()          → 🟢 *strategy-service* 시작 (ServiceLifecycleNotifier 위임용)
@@ -1205,6 +1209,35 @@ POST /api/strategy/refresh-market-state
 | PATCH | `/api/strategy/admin/config` | 투자·리스크 설정 변경 (부분 업데이트 지원) |
 | GET | `/api/strategy/admin/trailing-stop-status` | 보유 종목별 고점·스탑가 조회 |
 | GET | `/api/strategy/admin/time-cut-status` | 보유 종목별 매수일·경과·잔여 거래일 조회 |
+
+### 프론트엔드 대시보드 — 보유 종목 카드
+
+`Dashboard.jsx` 보유 종목 카드에 매수 시점의 **전략명**과 **시장상태** 배지를 표시합니다.
+
+**데이터 소스:** `GET /api/orders` (order-service) — `trade_orders.strategy_name`, `trade_orders.market_state`
+
+**표시 로직:**
+```javascript
+// 보유 종목별 가장 최근 FILLED BUY 주문에서 추출
+const buyOrder = orders
+  .filter(o => o.ticker === item.ticker && o.orderType === 'BUY' && o.status === 'FILLED')
+  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]
+```
+
+**표시 레이블:**
+
+| strategyName | 표시 |
+|---|---|
+| `volatility-breakout` | 변동성 돌파 |
+| `golden-cross` | 골든크로스 |
+| `rsi-bollinger` | RSI+볼린저 |
+
+| marketState | 표시 |
+|---|---|
+| `BULLISH` | 상승장 |
+| `SIDEWAYS` | 횡보장 |
+
+**UI:** 기존 `.history-tag.strategy` (초록) / `.history-tag.market` (회색) CSS 클래스 재사용
 
 ---
 

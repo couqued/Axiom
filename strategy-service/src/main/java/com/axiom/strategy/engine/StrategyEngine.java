@@ -18,6 +18,7 @@ import com.axiom.strategy.service.MarketStateService;
 import com.axiom.strategy.service.TimeCutService;
 import com.axiom.strategy.service.TrailingStopService;
 import com.axiom.strategy.strategy.TradingStrategy;
+import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,7 @@ public class StrategyEngine {
     private final MarketStateService marketStateService;
     private final TrailingStopService trailingStopService;
     private final TimeCutService timeCutService;
+    private final VolatilityBreakoutStrategy volatilityBreakoutStrategy;
     private final List<TradingStrategy> strategies; // Spring이 TradingStrategy 구현체를 자동 주입
 
     /** 감시 종목 목록. 08:30 MarketStateScheduler가 market-service에서 갱신. fallback: yml watch-tickers */
@@ -253,7 +255,12 @@ public class StrategyEngine {
         OrderResult result = switch (signal.getAction()) {
             case BUY -> {
                 OrderResult r = orderClient.buy(orderRequest);
-                if (r.success()) timeCutService.recordBuy(signal.getTicker(), signal.getStrategyName());
+                if (r.success()) {
+                    timeCutService.recordBuy(signal.getTicker(), signal.getStrategyName());
+                    if ("volatility-breakout".equals(signal.getStrategyName())) {
+                        volatilityBreakoutStrategy.markBought(signal.getTicker());
+                    }
+                }
                 yield r;
             }
             case SELL -> {

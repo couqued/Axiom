@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 변동성 돌파 전략 (상승장 단기 매매).
@@ -59,7 +60,6 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
         }
 
         if (currentPrice.compareTo(targetPrice) >= 0) {
-            todayBought.put(ticker, todayDate);
             return SignalDto.builder()
                     .action(SignalDto.Action.BUY)
                     .ticker(ticker)
@@ -82,6 +82,33 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
      */
     public Map<String, LocalDate> getTodayBought() {
         return todayBought;
+    }
+
+    /**
+     * 주문 체결 확정 후 호출. evaluate()가 아닌 실제 매수 성공 시점에 등록.
+     * StrategyEngine에서 호출.
+     */
+    public void markBought(String ticker) {
+        todayBought.put(ticker, LocalDate.now());
+    }
+
+    /**
+     * 서비스 재시작 시 todayBought 복구.
+     * order-service 주문 이력에서 오늘 volatility-breakout으로 FILLED된 BUY를 찾아 등록.
+     * MarketStateScheduler @PostConstruct에서 호출.
+     */
+    public void restoreFromOrders(List<com.axiom.strategy.dto.OrderSummaryDto> orders) {
+        LocalDate today = LocalDate.now();
+        orders.stream()
+                .filter(o -> "BUY".equals(o.getOrderType()))
+                .filter(o -> "FILLED".equals(o.getStatus()))
+                .filter(o -> "volatility-breakout".equals(o.getStrategyName()))
+                .filter(o -> o.getCreatedAt() != null && o.getCreatedAt().toLocalDate().equals(today))
+                .collect(Collectors.toMap(
+                        com.axiom.strategy.dto.OrderSummaryDto::getTicker,
+                        o -> today,
+                        (a, b) -> a))
+                .forEach(todayBought::putIfAbsent);
     }
 
     private SignalDto hold(String ticker, BigDecimal price, String reason) {
