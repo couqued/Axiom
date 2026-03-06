@@ -2,6 +2,8 @@ package com.axiom.strategy.notification;
 
 import com.axiom.strategy.dto.SignalDto;
 import lombok.extern.slf4j.Slf4j;
+
+import java.math.BigDecimal;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,24 +21,81 @@ public class SlackNotifier {
     private boolean enabled;
 
     /**
-     * 신호 발생 + 주문 결과를 단일 메시지로 발송.
-     * success=true: ✅ 체결, false: ❌ KIS 주문 실패
+     * 전략 신호 + 주문 결과 단일 메시지.
+     * success=true : ✅ 체결
+     * success=false: ❌ 주문 실패 + 실패사유 포함
      */
-    public void sendTradeResult(SignalDto signal, boolean success) {
+    public void sendTradeResult(SignalDto signal, boolean success, String errorMsg) {
         boolean isBuy = signal.getAction() == SignalDto.Action.BUY;
-        String actionKo = isBuy ? "매수" : "매도";
+        String actionKo    = isBuy ? "매수" : "매도";
         String resultEmoji = success ? "✅" : "❌";
         String resultText  = success ? "체결" : "주문 실패";
-        String text = String.format(
+
+        StringBuilder sb = new StringBuilder(String.format(
                 "%s *[%s %s]* %s\n" +
                 "> 전략: %s\n" +
                 "> 가격: %s원\n" +
-                "> 사유: %s",
+                "> 신호: %s",
                 resultEmoji, actionKo, resultText,
                 formatStock(signal.getStockName(), signal.getTicker()),
                 signal.getStrategyName(),
                 formatPrice(signal.getPrice()),
                 signal.getReason()
+        ));
+
+        if (!success && errorMsg != null) {
+            sb.append("\n> 실패사유: ").append(errorMsg);
+        }
+        send(sb.toString());
+    }
+
+    /**
+     * 트레일링 스탑 발동 알림.
+     */
+    public void sendTrailingStop(String ticker, String stockName,
+                                 BigDecimal currentPrice, double stopPercent, boolean success) {
+        String text = String.format(
+                "🛑 *[전략 실행 | 트레일링 스탑]* %s\n" +
+                "> 고점 대비 %.1f%% 하락 → 강제 매도\n" +
+                "> 매도가: %s원  |  주문: %s",
+                formatStock(stockName, ticker),
+                stopPercent,
+                formatPrice(currentPrice),
+                success ? "성공" : "실패"
+        );
+        send(text);
+    }
+
+    /**
+     * 타임컷 청산 알림.
+     */
+    public void sendTimeCut(String ticker, String stockName,
+                            BigDecimal currentPrice, int elapsed, int maxDays, boolean success) {
+        String text = String.format(
+                "⏱️ *[전략 실행 | 타임컷]* %s\n" +
+                "> %d거래일 경과 (기준: %d일) → 강제 매도\n" +
+                "> 매도가: %s원  |  주문: %s",
+                formatStock(stockName, ticker),
+                elapsed, maxDays,
+                formatPrice(currentPrice),
+                success ? "성공" : "실패"
+        );
+        send(text);
+    }
+
+    /**
+     * 마감청산 알림 (변동성 돌파 오버나이트 방지, 15:20).
+     */
+    public void sendForceExit(String ticker, String stockName,
+                              int quantity, BigDecimal price, boolean success) {
+        String text = String.format(
+                "🔔 *[전략 실행 | 마감청산]* %s %d주\n" +
+                "> 변동성 돌파 — 오버나이트 방지 (15:20)\n" +
+                "> 매도가: %s원  |  주문: %s",
+                formatStock(stockName, ticker),
+                quantity,
+                formatPrice(price),
+                success ? "성공" : "실패"
         );
         send(text);
     }

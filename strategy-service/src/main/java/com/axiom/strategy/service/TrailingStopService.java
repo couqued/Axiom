@@ -5,6 +5,7 @@ import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
+import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import jakarta.annotation.PostConstruct;
@@ -129,15 +130,12 @@ public class TrailingStopService {
                             .closeReason("TRAILING_STOP")
                             .build();
 
-                    boolean success = orderClient.sell(sellOrder);
+                    OrderResult result = orderClient.sell(sellOrder);
                     log.info("[TrailingStop] 매도 주문 — ticker: {}, qty: {}, success: {}",
-                            ticker, position.getQuantity(), success);
+                            ticker, position.getQuantity(), result.success());
 
-                    String stockLabel = position.getStockName() != null
-                            ? position.getStockName() + " (" + ticker + ")" : ticker;
-                    slackNotifier.sendError(String.format(
-                            "🛑 [트레일링 스탑] %s — 고점 대비 %.0f%% 하락 → 매도 %,.0f원 (%s)",
-                            stockLabel, stopPercent, currentPrice, success ? "성공" : "실패"));
+                    slackNotifier.sendTrailingStop(
+                            ticker, position.getStockName(), currentPrice, stopPercent, result.success());
                 });
     }
 }

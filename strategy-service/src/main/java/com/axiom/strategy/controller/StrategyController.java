@@ -63,7 +63,7 @@ public class StrategyController {
                 .reason("테스트 — Slack 연동 확인용 신호")
                 .signalAt(LocalDateTime.now())
                 .build();
-        slackNotifier.sendTradeResult(testSignal, true);
+        slackNotifier.sendTradeResult(testSignal, true, null);
         return ResponseEntity.ok(Map.of("result", "Slack 테스트 메시지 발송 완료"));
     }
 }

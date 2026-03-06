@@ -5,6 +5,7 @@ import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
+import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
@@ -169,15 +170,12 @@ public class TimeCutService {
                             .closeReason("TIME_CUT")
                             .build();
 
-                    boolean success = orderClient.sell(sellOrder);
-                    log.info("[TimeCut] 강제 청산 — ticker: {}, qty: {}, success: {}",
-                            ticker, position.getQuantity(), success);
+                    OrderResult result = orderClient.sell(sellOrder);
+                    log.info("[TimeCut] 타임컷 청산 — ticker: {}, qty: {}, success: {}",
+                            ticker, position.getQuantity(), result.success());
 
-                    String stockLabel = position.getStockName() != null
-                            ? position.getStockName() + " (" + ticker + ")" : ticker;
-                    slackNotifier.sendError(String.format(
-                            "⏱️ [타임 컷] %s — %d거래일 경과 (기준: %d일) → 강제 청산 %,.0f원 (%s)",
-                            stockLabel, elapsed, maxDays, currentPrice, success ? "성공" : "실패"));
+                    slackNotifier.sendTimeCut(
+                            ticker, position.getStockName(), currentPrice, elapsed, maxDays, result.success());
                 });
     }
 }

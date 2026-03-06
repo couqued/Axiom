@@ -395,20 +395,29 @@ order-service/
     ├── java/com/axiom/order/
     │   ├── OrderApplication.java
     │   ├── config/KisApiConfig.java           ← KIS 설정 + kisWebClient Bean
-    │   ├── controller/OrderController.java    ← POST /api/orders/buy|sell, GET /api/orders
+    │   ├── controller/
+    │   │   ├── OrderController.java          ← POST /api/orders/buy|sell, GET /api/orders
+    │   │   └── SkippedSignalController.java  ← POST/GET /api/orders/skipped
     │   ├── service/
     │   │   ├── OrderService.java              ← 주문 처리 핵심 로직
     │   │   ├── KisOrderApiService.java        ← KIS 주문 API 호출
-    │   │   └── KisTokenService.java           ← 토큰 위임 조회 (market-service)
+    │   │   ├── KisTokenService.java           ← 토큰 위임 조회 (market-service)
+    │   │   └── SkippedSignalService.java      ← 스킵 신호 기록/조회 (upsert)
     │   ├── util/MarketHoursChecker.java       ← 운영시간 체크
-    │   ├── entity/TradeOrder.java             ← orders.trade_orders 엔티티
-    │   ├── repository/TradeOrderRepository.java
+    │   ├── entity/
+    │   │   ├── TradeOrder.java                ← orders.trade_orders 엔티티
+    │   │   └── SkippedSignal.java             ← orders.skipped_signals 엔티티
+    │   ├── repository/
+    │   │   ├── TradeOrderRepository.java
+    │   │   └── SkippedSignalRepository.java
     │   ├── kafka/OrderEventProducer.java      ← Kafka 이벤트 발행
     │   ├── notification/
     │   │   └── ServiceLifecycleNotifier.java  ← 서비스 기동/종료 Slack 알림
     │   └── dto/
     │       ├── OrderRequest.java
-    │       └── OrderResponse.java
+    │       ├── OrderResponse.java
+    │       ├── SkippedSignalRequest.java
+    │       └── SkippedSignalResponse.java
     └── resources/
         ├── application.yml
         └── application-secret.yml             ← KIS API 키 + Slack Webhook URL (gitignore)
@@ -461,6 +470,9 @@ POST /api/orders/buy
 POST /api/orders/sell → 동일 (SELL 자동 설정)
 GET  /api/orders      → 전체 주문 내역 (최신순)
 GET  /api/orders/ticker/{ticker} → 종목별 주문 내역
+
+POST /api/orders/skipped         → 스킵 신호 기록 (strategy-service 전용, upsert)
+GET  /api/orders/skipped?days=N  → 최근 N일 스킵 목록 (프론트엔드 전략 탭 표시용)
 ```
 
 **운영시간 외 응답:**
@@ -542,7 +554,15 @@ void prePersist() {
 }
 
 // @Enumerated(EnumType.STRING): enum을 숫자(0,1)가 아닌 문자열("BUY")로 저장
+
+// v0.6.0 추가 컬럼:
+String strategyName;   // 전략명 (golden-cross, rsi-bollinger, volatility-breakout)
+String marketState;    // 시장 상태 (BULLISH, SIDEWAYS)
+String closeReason;    // 청산사유 (SIGNAL, TRAILING_STOP, TIME_CUT, FORCE_EXIT)
 ```
+
+> **`skipped_signals` 테이블** (v0.6.0 신규): BUY 가드 스킵 이력 저장.
+> 상세 스키마는 `docs/data-management.md` 참조.
 
 ### `OrderEventProducer.java`
 
@@ -742,7 +762,9 @@ strategy-service/
     │   │   ├── AdminConfigStore.java           ← 런타임 설정 저장소 (paused + 투자 설정, JSON 영구 저장)
     │   │   ├── AdminController.java            ← GET/POST/PATCH /api/strategy/admin/**
     │   │   ├── AdminStatusDto.java
-    │   │   └── AdminConfigDto.java
+    │   │   ├── AdminConfigDto.java
+    │   │   ├── TrailingStopStatusDto.java      ← 고점·스탑가 응답 DTO
+    │   │   └── TimeCutStatusDto.java           ← 매수일·경과·잔여 거래일 응답 DTO
     │   ├── controller/StrategyController.java  ← POST /api/strategy/run, GET /api/strategy/market-state
     │   ├── strategy/
     │   │   ├── TradingStrategy.java            ← 전략 인터페이스
@@ -753,6 +775,7 @@ strategy-service/
     │   ├── scheduler/
     │   │   ├── StrategyScheduler.java          ← 평일 09:05~15:20, 5분 주기
     │   │   ├── MarketStateScheduler.java       ← 평일 08:30, 시장 상태 갱신
+    │   │   ├── TrailingStopScheduler.java      ← 평일 09:00~15:20, 1분 주기 트레일링 스탑 체크
     │   │   └── ForceExitScheduler.java         ← 평일 15:20, 변동성 돌파 강제 청산
     │   ├── service/
     │   │   ├── MarketStateService.java         ← 코스피 MA20 → BULLISH/SIDEWAYS 판별
@@ -760,7 +783,7 @@ strategy-service/
     │   │   └── TimeCutService.java             ← 타임 컷 (3거래일)
     │   ├── client/
     │   │   ├── MarketClient.java               ← market-service 캔들/현재가/지수 조회
-    │   │   ├── OrderClient.java                ← 매수/매도 위임 (order-service)
+    │   │   ├── OrderClient.java                ← 매수/매도/스킵기록 위임 (order-service)
     │   │   └── PortfolioClient.java            ← 보유 포지션 조회 (portfolio-service)
     │   ├── notification/
     │   │   ├── SlackNotifier.java              ← Slack Webhook 알림
@@ -771,7 +794,10 @@ strategy-service/
     │       ├── SignalDto.java                  ← BUY / SELL / HOLD
     │       ├── StockPriceDto.java              ← 현재가 (LiveCandle 생성용, marketWarnCode 포함)
     │       ├── PortfolioItemDto.java           ← 보유 포지션
-    │       └── OrderRequest.java
+    │       ├── OrderRequest.java
+    │       ├── OrderResult.java                ← 주문 성공/실패 결과 record
+    │       ├── OrderSummaryDto.java            ← TimeCut 재시작 복구용 주문 이력 요약
+    │       └── SkippedSignalRequest.java       ← 스킵 신호 기록 요청 DTO
     └── resources/
         ├── application.yml
         └── application-secret.yml             ← Slack Webhook URL (gitignore)
@@ -1013,6 +1039,7 @@ public void run() {
 | `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 갱신 |
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` | ① market-service에서 감시 종목 목록 조회 → watchTickers 갱신<br>② 코스피 MA20 → 시장 상태 판별 |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
+| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) |
 | `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 강제 청산 |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작
@@ -1073,8 +1100,10 @@ GET http://localhost:8081/internal/screened-tickers            → List<String> 
 //   실패 시 빈 List 반환 → StrategyEngine은 기존 watchTickers(yml) 유지
 
 // OrderClient
-POST http://localhost:8082/api/orders/buy  { ticker, quantity, price } → 성공 true / 실패 false
-POST http://localhost:8082/api/orders/sell { ticker, quantity, price }
+POST http://localhost:8082/api/orders/buy        { ticker, quantity, price, ... } → OrderResult(success, errorMsg)
+POST http://localhost:8082/api/orders/sell       { ticker, quantity, price, ... }
+GET  http://localhost:8082/api/orders            → List<OrderSummaryDto> (TimeCut 재시작 복구용)
+POST http://localhost:8082/api/orders/skipped   { ticker, skipReason, ... }       (스킵 신호 기록)
 
 // PortfolioClient
 GET http://localhost:8083/api/portfolio → List<PortfolioItemDto>
@@ -1088,12 +1117,23 @@ GET http://localhost:8083/api/portfolio → List<PortfolioItemDto>
 ### `SlackNotifier.java`
 
 ```
-sendSignal(signal)            → 매수/매도 신호 발생 시 🟢/🔴 알림
-sendOrderFilled(signal)       → 체결 성공 ✅ / 실패 ❌ 알림
-sendError(message)            → 전략 오류 ⚠️ 알림
+sendTradeResult(signal, success, errorMsg)
+  → 전략 신호 + 주문 결과를 단일 메시지로 통합 발송
+  → success=true: ✅ *[매수/매도 체결]*
+  → success=false: ❌ *[매수/매도 실패]* + 실패사유
+
+sendTrailingStop(ticker, stockName, currentPrice, stopPercent, success)
+  → 🛑 *[전략 실행 | 트레일링 스탑]* — 고점 대비 N% 하락 강제 매도
+
+sendTimeCut(ticker, stockName, currentPrice, elapsed, maxDays, success)
+  → ⏱️ *[전략 실행 | 타임컷]* — N거래일 경과 강제 매도
+
+sendForceExit(ticker, stockName, quantity, price, success)
+  → 🔔 *[전략 실행 | 마감청산]* — 변동성 돌파 오버나이트 방지 (15:20)
+
+sendError(message)            → ⚠️ *[전략 오류]* 알림
 sendServiceStarted()          → 🟢 *strategy-service* 시작 (ServiceLifecycleNotifier 위임용)
 sendServiceStopped()          → 🔴 *strategy-service* 종료 (ServiceLifecycleNotifier 위임용)
-(트레일링 스탑/타임 컷 알림은 각 Service에서 직접 호출)
 
 이중 안전장치:
   ① enabled=false → 로그만 출력, 실제 발송 안 함
@@ -1163,6 +1203,8 @@ POST /api/strategy/refresh-market-state
 | POST | `/api/strategy/admin/pause` | 매매 긴급 정지 |
 | POST | `/api/strategy/admin/resume` | 매매 재개 |
 | PATCH | `/api/strategy/admin/config` | 투자·리스크 설정 변경 (부분 업데이트 지원) |
+| GET | `/api/strategy/admin/trailing-stop-status` | 보유 종목별 고점·스탑가 조회 |
+| GET | `/api/strategy/admin/time-cut-status` | 보유 종목별 매수일·경과·잔여 거래일 조회 |
 
 ---
 

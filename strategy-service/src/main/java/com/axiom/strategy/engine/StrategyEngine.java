@@ -7,6 +7,7 @@ import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.OrderRequest;
+import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.dto.SkippedSignalRequest;
@@ -249,22 +250,22 @@ public class StrategyEngine {
                 .closeReason("SIGNAL")
                 .build();
 
-        boolean success = switch (signal.getAction()) {
+        OrderResult result = switch (signal.getAction()) {
             case BUY -> {
-                boolean result = orderClient.buy(orderRequest);
-                if (result) timeCutService.recordBuy(signal.getTicker(), signal.getStrategyName());
-                yield result;
+                OrderResult r = orderClient.buy(orderRequest);
+                if (r.success()) timeCutService.recordBuy(signal.getTicker(), signal.getStrategyName());
+                yield r;
             }
             case SELL -> {
-                boolean result = orderClient.sell(orderRequest);
-                if (result) timeCutService.clearBuy(signal.getTicker());
-                yield result;
+                OrderResult r = orderClient.sell(orderRequest);
+                if (r.success()) timeCutService.clearBuy(signal.getTicker());
+                yield r;
             }
-            default -> false;
+            default -> OrderResult.fail("알 수 없는 액션");
         };
 
-        slackNotifier.sendTradeResult(signal, success);
-        return success;
+        slackNotifier.sendTradeResult(signal, result.success(), result.errorMsg());
+        return result.success();
     }
 
     /**

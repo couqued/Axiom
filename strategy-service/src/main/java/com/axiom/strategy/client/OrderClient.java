@@ -1,6 +1,7 @@
 package com.axiom.strategy.client;
 
 import com.axiom.strategy.dto.OrderRequest;
+import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.SkippedSignalRequest;
 import lombok.RequiredArgsConstructor;
@@ -21,11 +22,11 @@ public class OrderClient {
     @Qualifier("orderWebClient")
     private final WebClient orderWebClient;
 
-    public boolean buy(OrderRequest request) {
+    public OrderResult buy(OrderRequest request) {
         return placeOrder("/api/orders/buy", request);
     }
 
-    public boolean sell(OrderRequest request) {
+    public OrderResult sell(OrderRequest request) {
         return placeOrder("/api/orders/sell", request);
     }
 
@@ -58,7 +59,7 @@ public class OrderClient {
         }
     }
 
-    private boolean placeOrder(String path, OrderRequest request) {
+    private OrderResult placeOrder(String path, OrderRequest request) {
         try {
             Map<?, ?> response = orderWebClient.post()
                     .uri(path)
@@ -68,11 +69,11 @@ public class OrderClient {
                     .block();
             log.info("[OrderClient] 주문 완료 - path: {}, ticker: {}, response: {}",
                     path, request.getTicker(), response);
-            return true;
+            return OrderResult.ok();
         } catch (Exception e) {
             log.error("[OrderClient] 주문 실패 - path: {}, ticker: {}, error: {}",
                     path, request.getTicker(), e.getMessage());
-            return false;
+            return OrderResult.fail(e.getMessage());
         }
     }
 }

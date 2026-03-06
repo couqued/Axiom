@@ -262,7 +262,7 @@ RSI = 100 - (100 / (1 + RS))
 | 설정 | `AdminConfigStore.trailingStopPct` (런타임 변경 가능) |
 | 기본값 | `strategy.trailing-stop.stop-percent: 7.0` (yml → AdminConfigStore 초기화) |
 | 적용 범위 | 모든 보유 종목 |
-| 실행 시점 | StrategyEngine.run() 내 (5분 주기) |
+| 실행 시점 | `TrailingStopScheduler` 1분 주기 (보유 종목 전용) + `StrategyEngine.run()` 5분 주기 |
 
 ### 동작 방식
 
@@ -277,11 +277,19 @@ stopPrice = peakPrice × (1 - 7/100)   ← 청산 기준가
 현재가 > stopPrice → 아무것도 안 함
 ```
 
-### 고점 초기화
+### 고점 초기화 및 재시작 복구
 
 - `peakPrices`는 `ConcurrentHashMap<String, BigDecimal>`에 저장 (메모리)
-- 서비스 재시작 시 초기화 → 첫 실행 시 현재가가 고점으로 설정됨
+- **재시작 복구**: `@PostConstruct initFromPortfolio()` 실행 → portfolio-service의 `avgPrice`로 즉시 초기화
+  (avgPrice는 보수적 초기값, 다음 체크 시 실제 현재가로 자동 갱신)
 - 보유 포지션 없는 종목은 자동으로 제외됨
+
+### 현황 조회 API
+
+```
+GET /api/strategy/admin/trailing-stop-status
+→ { "005930": { "peakPrice": 78500, "stopPrice": 72975 }, ... }
+```
 
 ### 7% 설정 이유
 
@@ -324,6 +332,20 @@ tradingDaysBetween(Monday, Wednesday) = 2   // 아직 유지
 tradingDaysBetween(Monday, Thursday)  = 3   // 강제 청산!
 ```
 
+### 재시작 복구
+
+- `buyDates`는 `ConcurrentHashMap<String, LocalDate>`에 저장 (메모리)
+- **재시작 복구**: `@PostConstruct initFromOrders()` 실행
+  → order-service에서 FILLED BUY 이력 조회
+  → 현재 보유 중인 종목 중 `rsi-bollinger` 전략 매수 건의 매수일 자동 복구
+
+### 현황 조회 API
+
+```
+GET /api/strategy/admin/time-cut-status
+→ { "000660": { "buyDate": "2026-03-04", "elapsed": 2, "remaining": 1 }, ... }
+```
+
 ### 3거래일 설정 이유
 
 - RSI+볼린저밴드 전략의 기대 반등 기간: 1~3일 (단기 과매도 해소)
@@ -339,7 +361,9 @@ tradingDaysBetween(Monday, Thursday)  = 3   // 강제 청산!
 | `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 캐싱 |
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
+| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) |
 | `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 강제 청산 |
+| `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작
 
@@ -521,11 +545,15 @@ SELL은 수량을 직접 계산하지 않고, portfolio-service에서 실제 보
 
 ### BUY 3단계 가드
 
-| 단계 | 조건 | 처리 |
-|------|------|------|
-| ① 시장경보 | `!priceData.isSafe()` | BUY 스킵 (투자주의/경고/위험 종목 제외) |
-| ② 중복 보유 | `positions.contains(ticker)` | BUY 스킵 (이미 보유 중인 종목 재진입 방지) |
-| ③ 한도 초과 | `positions.size() + boughtThisRun[0] >= maxPositions` | BUY 스킵 (최대 3종목 초과 방지) |
+| 단계 | 조건 | 처리 | skip_reason 기록 |
+|------|------|------|-----------------|
+| ① 시장경보 | `!priceData.isSafe()` | BUY 스킵 (투자주의/경고/위험 종목 제외) | `MARKET_WARN` |
+| ② 중복 보유 | `positions.contains(ticker)` | BUY 스킵 (이미 보유 중인 종목 재진입 방지) | — (기록 없음) |
+| ③ 한도 초과 | `positions.size() + boughtThisRun[0] >= maxPositions` | BUY 스킵 (최대 3종목 초과 방지) | `MAX_POSITIONS` |
+
+수량 부족(투자금으로 1주 미만): `handleSignal()` 내에서 `BUDGET_INSUFFICIENT` 기록 후 스킵.
+
+스킵 기록은 order-service의 `skipped_signals` 테이블에 저장됩니다 (당일 동일 ticker+reason은 upsert로 count 누적).
 
 ### `boughtThisRun` 카운터
 

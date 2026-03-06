@@ -124,7 +124,7 @@ Map<String, BigDecimal>  →  { ticker: 고점가격 }
 | 항목 | 내용 |
 |------|------|
 | 저장 위치 | ConcurrentHashMap (힙 메모리) |
-| 갱신 주기 | 5분마다 StrategyEngine이 check() 호출 → max(기존고점, 현재가)로 갱신 |
+| 갱신 주기 | 1분마다 TrailingStopScheduler.check() + 5분마다 StrategyEngine.check() → max(기존고점, 현재가)로 갱신 |
 | 재시작 복구 | @PostConstruct → portfolio avgPrice로 초기화 → 다음 5분 실행 시 현재가로 자동 정확화 |
 | 삭제 시점 | 포지션 청산 시 (매도 또는 트레일링 스탑 발동) |
 
@@ -200,12 +200,66 @@ strategy-service Pod 기동
 
 | 메서드 | 발생 시점 | 메시지 형식 |
 |--------|----------|------------|
-| `sendTradeResult(signal, success)` | 전략 신호 주문 직후 | `✅/❌ [매수/매도 체결/실패] 종목명` |
-| `sendError(message)` | 트레일링 스탑 발동, 타임컷 청산, 전략 예외 | `⚠️ [전략 오류] ...` |
+| `sendTradeResult(signal, success, errorMsg)` | 전략 신호 주문 직후 | 아래 참조 |
+| `sendTrailingStop(ticker, stockName, currentPrice, stopPercent, success)` | 트레일링 스탑 발동 | 아래 참조 |
+| `sendTimeCut(ticker, stockName, currentPrice, elapsed, maxDays, success)` | 타임컷 청산 | 아래 참조 |
+| `sendForceExit(ticker, stockName, quantity, price, success)` | 마감청산 (15:20) | 아래 참조 |
+| `sendError(message)` | 전략 예외 오류 | `⚠️ [전략 오류] 메시지` |
 | `sendServiceStarted()` | strategy-service 기동 | `🟢 strategy-service 시작` |
 | `sendServiceStopped()` | strategy-service 종료 | `🔴 strategy-service 종료` |
 
 > `sendTradeResult`는 신호 알림 + 주문 결과를 **단일 메시지**로 통합하여 중복 발송 방지.
+> 리스크 관리(트레일링 스탑·타임컷·마감청산)는 전용 메서드로 분리하여 `[전략 오류]` 표시 제거.
+
+### 메시지 상세 형식
+
+#### sendTradeResult — 전략 신호 매수/매도
+
+```
+✅ *[매수 체결]* 삼성전자 (005930)
+> 전략: rsi-bollinger
+> 가격: 74,000원
+> 신호: RSI 과매도 + 볼린저 하단 터치
+```
+
+```
+❌ *[매수 실패]* 삼성전자 (005930)
+> 전략: rsi-bollinger
+> 가격: 74,000원
+> 신호: RSI 과매도 + 볼린저 하단 터치
+> 실패사유: [KIS-ERRCD] 잔고 부족
+```
+
+```
+✅ *[매도 체결]* 삼성전자 (005930)
+> 전략: rsi-bollinger
+> 가격: 78,500원
+> 신호: RSI 과매수 + 볼린저 상단 돌파
+```
+
+#### sendTrailingStop — 트레일링 스탑
+
+```
+🛑 *[전략 실행 | 트레일링 스탑]* 삼성전자 (005930)
+> 고점 대비 7.0% 하락 → 강제 매도
+> 매도가: 73,200원  |  주문: 성공
+```
+
+#### sendTimeCut — 타임컷
+
+```
+⏱️ *[전략 실행 | 타임컷]* SK하이닉스 (000660)
+> 3거래일 경과 (기준: 3일) → 강제 매도
+> 매도가: 235,000원  |  주문: 성공
+```
+
+#### sendForceExit — 마감청산 (15:20)
+
+```
+🔔 *[전략 실행 | 마감청산]* 카카오 (035720) 10주
+> 변동성 돌파 — 오버나이트 방지 (15:20)
+> 매도가: 42,500원  |  주문: 성공
+```
 
 ---
 
@@ -217,7 +271,9 @@ strategy-service Pod 기동
 |--------|------|------|
 | GET | `/api/market/stocks/{ticker}/price` | 현재가 조회 |
 | GET | `/api/market/stocks/search` | 종목 검색 |
+| GET | `/api/market/stocks/{ticker}` | 종목 상세 조회 |
 | GET | `/api/market/stocks/{ticker}/candles` | 일봉 조회 |
+| GET | `/api/market/index/{code}/candles` | 지수 일봉 조회 (strategy-service 내부 전용) |
 
 ### order-service (8082)
 

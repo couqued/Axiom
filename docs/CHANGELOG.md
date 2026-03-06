@@ -45,6 +45,7 @@
 
 - KIS API 현재가 조회에 재시도 로직 추가 (fixedDelay 1회, 1초)
 - 전략 실행 시 종목 간 200ms 딜레이 추가 (KIS API Rate Limit 대응)
+- **트레일링 스탑 체크 주기 단축**: `StrategyEngine` 내 5분 주기 → `TrailingStopScheduler` 분리로 **1분 주기** 추가 (보유 종목만 별도 체크, StrategyEngine 내 기존 체크 유지)
 
 ---
 

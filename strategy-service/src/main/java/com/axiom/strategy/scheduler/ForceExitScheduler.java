@@ -3,6 +3,7 @@ package com.axiom.strategy.scheduler;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.OrderRequest;
+import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
@@ -45,11 +46,11 @@ public class ForceExitScheduler {
                 .collect(Collectors.toSet());
 
         if (boughtToday.isEmpty()) {
-            log.info("[ForceExit] 변동성 돌파 보유 종목 없음 — 강제 청산 불필요");
+            log.info("[ForceExit] 변동성 돌파 보유 종목 없음 — 마감청산 불필요");
             return;
         }
 
-        log.info("[ForceExit] 강제 청산 시작 — 대상 종목: {}", boughtToday);
+        log.info("[ForceExit] 마감청산 시작 — 대상 종목: {}", boughtToday);
 
         // portfolio-service에서 실제 보유 종목 확인 후 매도
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
@@ -63,13 +64,13 @@ public class ForceExitScheduler {
                     .closeReason("FORCE_EXIT")
                     .build();
 
-            boolean success = orderClient.sell(sellOrder);
-            log.info("[ForceExit] 강제 청산 — ticker: {}, qty: {}, success: {}",
-                    position.getTicker(), position.getQuantity(), success);
+            OrderResult result = orderClient.sell(sellOrder);
+            log.info("[ForceExit] 마감청산 — ticker: {}, qty: {}, success: {}",
+                    position.getTicker(), position.getQuantity(), result.success());
 
-            slackNotifier.sendError(String.format(
-                    "🔔 [강제 청산] %s %d주 — 변동성 돌파 오버나이트 방지 (%s)",
-                    position.getTicker(), position.getQuantity(), success ? "성공" : "실패"));
+            slackNotifier.sendForceExit(
+                    position.getTicker(), position.getStockName(),
+                    position.getQuantity(), position.getAvgPrice(), result.success());
         }
 
         // 오늘 매수 기록 정리
