@@ -2,8 +2,8 @@ package com.axiom.market.service;
 
 import com.axiom.market.config.KisApiConfig;
 import com.axiom.market.dto.CandleDto;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -18,17 +19,25 @@ import java.util.Random;
 /**
  * 코스피(0001), 코스닥(1001) 등 시장 지수의 일봉 데이터를 제공한다.
  * 시장 상태(상승장/횡보장) 판별에 사용된다.
+ * <p>mode 와 무관하게 지수는 항상 real 서버에서 조회한다 (paper 서버가 지수 데이터를 잘못 반환).
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class IndexCandleService {
 
     private static final DateTimeFormatter KIS_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final KisApiConfig kisApiConfig;
     private final KisTokenService kisTokenService;
-    private final WebClient kisWebClient;
+    private final WebClient kisRealWebClient;
+
+    public IndexCandleService(KisApiConfig kisApiConfig,
+                              KisTokenService kisTokenService,
+                              @Qualifier("kisRealWebClient") WebClient kisRealWebClient) {
+        this.kisApiConfig    = kisApiConfig;
+        this.kisTokenService = kisTokenService;
+        this.kisRealWebClient = kisRealWebClient;
+    }
 
     /**
      * 지수 코드의 최근 days일치 일봉 반환.
@@ -47,29 +56,34 @@ public class IndexCandleService {
 
     @SuppressWarnings("unchecked")
     private List<CandleDto> fetchIndexFromKis(String indexCode, int days) {
-        KisApiConfig.ModeConfig active = kisApiConfig.getActive();
-        String token = kisTokenService.getAccessToken();
+        // 지수는 항상 real 서버 사용 (paper 서버가 지수 데이터를 잘못 반환)
+        KisApiConfig.ModeConfig realConfig = kisApiConfig.getReal();
+        String token = kisTokenService.getRealAccessToken();
+
+        if (token == null) {
+            log.warn("[KIS] real 토큰 발급 실패 — 지수 mock 데이터로 폴백 (indexCode: {})", indexCode);
+            return getMockIndexCandles(indexCode, days);
+        }
 
         LocalDate today = LocalDate.now();
         LocalDate from  = today.minusDays(days + 10L);
 
-        log.info("[KIS] 지수 일봉 조회 - indexCode: {}, {} ~ {}", indexCode, from, today);
+        log.info("[KIS-REAL] 지수 일봉 조회 - indexCode: {}, {} ~ {}", indexCode, from, today);
 
         try {
-            Map<String, Object> response = kisWebClient.get()
+            Map<String, Object> response = kisRealWebClient.get()
                     .uri(uriBuilder -> uriBuilder
-                            .path("/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice")
-                            .queryParam("FID_COND_MRKT_DIV_CODE", "U")   // U = 지수 (J = 주식)
+                            .path("/uapi/domestic-stock/v1/quotations/inquire-index-daily-price")
+                            .queryParam("FID_COND_MRKT_DIV_CODE", "U")   // U = 업종/지수
                             .queryParam("FID_INPUT_ISCD",         indexCode)
                             .queryParam("FID_INPUT_DATE_1",       from.format(KIS_DATE_FMT))
                             .queryParam("FID_INPUT_DATE_2",       today.format(KIS_DATE_FMT))
                             .queryParam("FID_PERIOD_DIV_CODE",    "D")
-                            .queryParam("FID_ORG_ADJ_PRC",        "0")
                             .build())
                     .header("authorization", "Bearer " + token)
-                    .header("appkey",    active.getAppKey())
-                    .header("appsecret", active.getAppSecret())
-                    .header("tr_id",     "FHKST03010100")
+                    .header("appkey",    realConfig.getAppKey())
+                    .header("appsecret", realConfig.getAppSecret())
+                    .header("tr_id",     "FHKUP03500100")
                     .retrieve()
                     .bodyToMono(Map.class)
                     .block();
@@ -78,7 +92,8 @@ public class IndexCandleService {
                     (List<Map<String, String>>) response.get("output2");
 
             if (output2 == null || output2.isEmpty()) {
-                log.warn("[KIS] 지수 일봉 데이터 없음 - indexCode: {}. Mock 데이터로 폴백.", indexCode);
+                log.warn("[KIS] 지수 일봉 데이터 없음 - indexCode: {}, msg: {}. Mock 데이터로 폴백.",
+                        indexCode, response.get("msg1"));
                 return getMockIndexCandles(indexCode, days);
             }
 
@@ -88,15 +103,16 @@ public class IndexCandleService {
                 if (dateStr == null || dateStr.isBlank()) continue;
                 candles.add(CandleDto.builder()
                         .tradeDate(LocalDate.parse(dateStr, KIS_DATE_FMT))
-                        .openPrice(parseBd(row.get("stck_oprc")))
-                        .highPrice(parseBd(row.get("stck_hgpr")))
-                        .lowPrice(parseBd(row.get("stck_lwpr")))
-                        .closePrice(parseBd(row.get("stck_clpr")))
+                        .openPrice(parseBd(row.get("bstp_nmix_oprc")))
+                        .highPrice(parseBd(row.get("bstp_nmix_hgpr")))
+                        .lowPrice(parseBd(row.get("bstp_nmix_lwpr")))
+                        .closePrice(parseBd(row.get("bstp_nmix_prpr")))
                         .volume(parseLong(row.get("acml_vol")))
                         .build());
             }
 
-            // 최근 days개만 반환
+            // KIS API는 최신→과거 순으로 반환 → 오름차순 정렬(과거→최신) 후 최근 days개 반환
+            candles.sort(Comparator.comparing(CandleDto::getTradeDate));
             return candles.size() > days ? candles.subList(candles.size() - days, candles.size()) : candles;
 
         } catch (Exception e) {

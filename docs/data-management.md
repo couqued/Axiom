@@ -1,6 +1,6 @@
 # Axiom 데이터 관리 구조
 
-> 최종 수정: 2026-03-06
+> 최종 수정: 2026-03-09 (인메모리 상태 DB 영속화 반영)
 
 ---
 
@@ -10,13 +10,15 @@ PostgreSQL 단일 인스턴스, 스키마로 서비스 격리.
 
 ```
 axiom (database)
-├── orders   스키마  → order-service 소유
+├── orders    스키마 → order-service 소유
 │   ├── trade_orders      주문 이력
 │   └── skipped_signals   투자 스킵 신호 이력
 ├── portfolio 스키마 → portfolio-service 소유
 │   └── portfolio         보유 포지션
-└── market    스키마 → market-service 소유
-    └── daily_candles     일봉 캐시
+├── market    스키마 → market-service 소유
+│   └── daily_candles     일봉 캐시
+└── strategy  스키마 → strategy-service 소유
+    └── strategy_state    리스크 관리 인메모리 상태 영속화
 ```
 
 ---
@@ -31,7 +33,7 @@ axiom (database)
 |------|------|------|
 | id | BIGSERIAL PK | |
 | ticker | VARCHAR(10) | 종목코드 |
-| stock_name | VARCHAR(50) | 종목명 |
+| stock_name | VARCHAR(50) | 종목명 (market-service 캔들 API fallback으로 한글명 보장) |
 | order_type | ENUM | BUY / SELL |
 | quantity | INT | 수량 |
 | price | NUMERIC(15,2) | 단가 |
@@ -65,7 +67,7 @@ BUY 신호가 발생했으나 실행되지 않은 종목 이력.
 | id | BIGSERIAL PK | |
 | trade_date | DATE | 스킵 발생 일자 |
 | ticker | VARCHAR(20) | 종목코드 |
-| stock_name | VARCHAR(100) | 종목명 |
+| stock_name | VARCHAR(100) | 종목명 (market-service 캔들 API fallback으로 한글명 보장) |
 | price | NUMERIC(15,2) | 신호 발생 시 현재가 |
 | strategy_name | VARCHAR(50) | 신호를 발생시킨 전략 |
 | market_state | VARCHAR(20) | 시장상태 |
@@ -97,6 +99,38 @@ handleSignal()
 
 ---
 
+### strategy.strategy_state
+
+리스크 관리 서비스의 인메모리 상태를 영속화하는 테이블. strategy-service 재기동 시 자체 DB에서 직접 복구하기 위해 사용.
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | BIGSERIAL PK | |
+| type | VARCHAR(50) | 상태 유형 (아래 표 참고) |
+| ticker | VARCHAR(10) | 종목코드 |
+| value | VARCHAR(100) | 저장 값 (숫자 또는 날짜 문자열) |
+| updated_at | TIMESTAMP | 마지막 저장/갱신 시각 |
+
+**UNIQUE 제약: (type, ticker)**
+
+**type 값:**
+
+| 값 | 관리 클래스 | value 형식 | 설명 |
+|----|-----------|-----------|------|
+| `PEAK_PRICE` | `TrailingStopService` | `BigDecimal.toPlainString()` | 종목별 고점 가격 |
+| `BUY_DATE` | `TimeCutService` | `LocalDate.toString()` (yyyy-MM-dd) | rsi-bollinger 매수일 |
+| `TODAY_BOUGHT` | `VolatilityBreakoutStrategy` | `LocalDate.toString()` (yyyy-MM-dd) | 변동성 돌파 당일 매수일 |
+
+**저장/갱신 시점:**
+
+| type | 저장 | 삭제 |
+|------|------|------|
+| `PEAK_PRICE` | 고점 신규 진입 또는 갱신 시 (실제 값이 변경된 경우에만) | 포지션 청산 또는 트레일링 스탑 발동 시 |
+| `BUY_DATE` | rsi-bollinger BUY 체결 시 | SELL 체결 또는 타임컷 발동 시 |
+| `TODAY_BOUGHT` | volatility-breakout BUY 체결 시 | 15:20 강제청산 또는 09:05 오버나이트 청산 시 |
+
+---
+
 ### portfolio.portfolio
 
 보유 포지션 목록. Kafka `order-events` 토픽을 consume하여 자동 갱신.
@@ -104,7 +138,7 @@ handleSignal()
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
 | ticker | VARCHAR(10) PK | 종목코드 |
-| stock_name | VARCHAR(50) | 종목명 |
+| stock_name | VARCHAR(50) | 종목명 (추가 매수 시 최신값으로 자동 갱신) |
 | quantity | INT | 수량 |
 | avg_price | NUMERIC(15,2) | 평균 매수단가 |
 | total_invest | NUMERIC(15,2) | 총 투자금액 |
@@ -113,7 +147,8 @@ handleSignal()
 
 ## 인메모리 데이터 (strategy-service)
 
-DB가 아닌 메모리에 저장되는 데이터. **서비스 재시작 시 자동 복구**.
+리스크 관리 핵심 3개 상태는 **메모리 + DB 이중 저장** 방식으로 운영됩니다.
+상태 변경 시마다 `strategy.strategy_state` 테이블에 즉시 동기화하며, 재기동 시 자체 DB에서 직접 복구합니다.
 
 ### TrailingStopService.peakPrices
 
@@ -123,10 +158,10 @@ Map<String, BigDecimal>  →  { ticker: 고점가격 }
 
 | 항목 | 내용 |
 |------|------|
-| 저장 위치 | ConcurrentHashMap (힙 메모리) |
+| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=PEAK_PRICE) |
 | 갱신 주기 | 1분마다 TrailingStopScheduler.check() + 5분마다 StrategyEngine.check() → max(기존고점, 현재가)로 갱신 |
-| 재시작 복구 | @PostConstruct → portfolio avgPrice로 초기화 → 다음 5분 실행 시 현재가로 자동 정확화 |
-| 삭제 시점 | 포지션 청산 시 (매도 또는 트레일링 스탑 발동) |
+| 재시작 복구 | `@PostConstruct initFromPortfolio()` → `strategy.strategy_state`에서 직접 로드 |
+| 삭제 시점 | 포지션 청산 시 (매도 또는 트레일링 스탑 발동) — 메모리 + DB 동시 삭제 |
 
 **stopPrice 계산:**
 ```
@@ -150,17 +185,46 @@ Map<String, LocalDate>  →  { ticker: 매수일 }
 
 | 항목 | 내용 |
 |------|------|
-| 저장 위치 | ConcurrentHashMap (힙 메모리) |
+| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=BUY_DATE) |
 | 적용 대상 | rsi-bollinger 전략으로 매수한 종목만 |
-| 갱신 주기 | BUY 체결 시 recordBuy() 호출로 오늘 날짜 저장 |
-| 재시작 복구 | @PostConstruct → order-service에서 FILLED BUY 이력 조회 → rsi-bollinger 매수 종목 buyDate 복구 |
-| 삭제 시점 | SELL 체결 시 또는 타임컷 발동 시 clearBuy() 호출 |
+| 갱신 주기 | BUY 체결 시 `recordBuy()` 호출로 오늘 날짜 저장 — 메모리 + DB 동시 저장 |
+| 재시작 복구 | `@PostConstruct initFromOrders()` → `strategy.strategy_state`에서 직접 로드 |
+| 삭제 시점 | SELL 체결 시 또는 타임컷 발동 시 `clearBuy()` 호출 — 메모리 + DB 동시 삭제 |
 
 **경과/잔여 거래일 계산:**
 ```
 elapsed   = TradingCalendar.tradingDaysBetween(buyDate, today)
 remaining = max(0, timeCutDays - elapsed)
 ```
+
+---
+
+### VolatilityBreakoutStrategy.todayBought
+
+```
+Map<String, LocalDate>  →  { ticker: 매수일 }
+```
+
+| 항목 | 내용 |
+|------|------|
+| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=TODAY_BOUGHT) |
+| 적용 대상 | volatility-breakout 전략으로 당일 매수한 종목 |
+| 갱신 주기 | BUY 체결 확정 후 `markBought()` 호출 — 메모리 + DB 동시 저장 |
+| 재시작 복구 | `@PostConstruct initFromDb()` → `strategy.strategy_state`에서 직접 로드 |
+| 삭제 시점 | 15:20 강제청산 또는 09:05 오버나이트 청산 완료 후 `removeTodayBought()` 호출 — 메모리 + DB 동시 삭제 |
+
+---
+
+### 인메모리 유지 (재기동 무방)
+
+| 상태 | 클래스 | 이유 |
+|------|--------|------|
+| `currentState`, `yesterdayClose`, `ma20` 등 | `MarketStateService` | 매일 08:30 자동 갱신 |
+| `boughtList`, `soldList` 카운터 | `DailySummaryCollector` | 15:25 일일 요약 후 리셋, 로그 목적 |
+| `cachedToken`, `cachedRealToken` | `KisTokenService` | 만료 시 자동 갱신 |
+| `stockNameCache` | `KisMarketApiService` | 성능 캐시, 재조회 가능 |
+| `watchTickers`, `lastBuyRanking`, `lastEvalAt` | `StrategyEngine` | 매 5분 주기 실시간 계산 |
+| AdminConfigStore 설정 | `AdminConfigStore` | 이미 `admin-config.json`으로 파일 영속화됨 |
 
 ---
 
@@ -175,24 +239,36 @@ strategy-service Pod 기동
         ├──► TrailingStopService.initFromPortfolio()
         │         │
         │         ▼
-        │    portfolioClient.getPositions()  ← portfolio-service HTTP 호출
+        │    stateStore.loadAllPeakPrices()
+        │    ← strategy.strategy_state WHERE type='PEAK_PRICE'
         │         │
         │         ▼
-        │    peakPrices.putIfAbsent(ticker, avgPrice)
-        │    (avgPrice는 보수적 초기값, 다음 5분 실행 시 실제 현재가로 갱신)
+        │    peakPrices.putAll(loaded)
+        │    로그: "[TrailingStop] DB에서 peakPrices 복구 — N개"
         │
-        └──► TimeCutService.initFromOrders()
+        ├──► TimeCutService.initFromOrders()
+        │         │
+        │         ▼
+        │    stateStore.loadAllBuyDates()
+        │    ← strategy.strategy_state WHERE type='BUY_DATE'
+        │         │
+        │         ▼
+        │    buyDates.putAll(loaded)
+        │    로그: "[TimeCut] DB에서 buyDates 복구 — N개"
+        │
+        └──► VolatilityBreakoutStrategy.initFromDb()
                   │
                   ▼
-             portfolioClient.getPositions()  ← 현재 보유 종목 목록
+             stateStore.loadAllTodayBought()
+             ← strategy.strategy_state WHERE type='TODAY_BOUGHT'
                   │
                   ▼
-             orderClient.getFilledOrders()   ← order-service HTTP 호출
-                  │
-                  ▼
-             보유 종목 중 rsi-bollinger FILLED BUY 최신 기록
-             → buyDates.putIfAbsent(ticker, buyDate)
+             todayBought.putAll(loaded)
+             로그: "[VolBreakout] DB에서 todayBought 복구 — N개"
 ```
+
+> 타 서비스(portfolio-service, order-service) 기동 순서에 **무관**합니다.
+> strategy-service가 자체 PostgreSQL에서 직접 읽으므로 가상 스레드 재시도 로직 없음.
 
 ---
 

@@ -16,7 +16,6 @@ import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.service.MarketState;
 import com.axiom.strategy.service.MarketStateService;
 import com.axiom.strategy.service.TimeCutService;
-import com.axiom.strategy.service.TrailingStopService;
 import com.axiom.strategy.strategy.TradingStrategy;
 import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
 import jakarta.annotation.PostConstruct;
@@ -24,9 +23,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Slf4j
@@ -41,13 +44,15 @@ public class StrategyEngine {
     private final PortfolioClient portfolioClient;
     private final SlackNotifier slackNotifier;
     private final MarketStateService marketStateService;
-    private final TrailingStopService trailingStopService;
     private final TimeCutService timeCutService;
     private final VolatilityBreakoutStrategy volatilityBreakoutStrategy;
     private final List<TradingStrategy> strategies; // Spring이 TradingStrategy 구현체를 자동 주입
 
     /** 감시 종목 목록. 08:30 MarketStateScheduler가 market-service에서 갱신. fallback: yml watch-tickers */
     private volatile List<String> watchTickers = List.of();
+    /** 마지막 전략 실행 BUY 랭킹 (score 내림차순 정렬, 최대 30개) */
+    private volatile List<EvalRankEntry> lastBuyRanking = List.of();
+    private volatile LocalDateTime lastEvalAt;
 
     @PostConstruct
     public void init() {
@@ -60,6 +65,13 @@ public class StrategyEngine {
         watchTickers = tickers;
     }
 
+    public List<EvalRankEntry> getLastBuyRanking() { return lastBuyRanking; }
+    public LocalDateTime getLastEvalAt() { return lastEvalAt; }
+
+    public int getWatchTickerCount() {
+        return watchTickers.size();
+    }
+
     /**
      * 모든 감시 종목에 대해 활성화된 전략을 실행한다.
      *
@@ -70,12 +82,30 @@ public class StrategyEngine {
      *   <li>트레일링 스탑 + 타임 컷 체크</li>
      * </ol>
      */
-    public record RunResult(int evaluated, int bought, int sold, boolean paused) {}
+    public record TradeRecord(String ticker, String stockName, BigDecimal price) {}
+    public record SkipRecord(String ticker, String stockName, String reason) {}
+    private record BuyCandidate(SignalDto signal, List<CandleDto> allCandles, StockPriceDto priceData) {
+        double score() { return signal.getScore(); }
+    }
+    public record EvalRankEntry(
+            int rank,
+            String ticker,
+            String stockName,
+            String strategyName,
+            double score,
+            String reason,
+            String result    // "매수" | "한도초과" | "예산부족" | "이미보유"
+    ) {}
+
+    public record RunResult(int evaluated, int bought, int sold, boolean paused,
+                            int errors, int skippedMarketWarn, int skippedMaxPositions,
+                            List<TradeRecord> boughtList, List<TradeRecord> soldList,
+                            List<SkipRecord> skippedList) {}
 
     public RunResult run() {
         if (adminConfigStore.isPaused()) {
             log.info("[Engine] 매매 중단 상태 — 전략 실행 스킵");
-            return new RunResult(0, 0, 0, true);
+            return new RunResult(0, 0, 0, true, 0, 0, 0, List.of(), List.of(), List.of());
         }
 
         MarketState marketState = marketStateService.getCurrentState();
@@ -86,51 +116,142 @@ public class StrategyEngine {
 
         // 보유 포지션 한 번 조회 (BUY 가드 + 트레일링 스탑 + 타임 컷 공용)
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
-        int[] boughtThisRun = {0};
-        int[] soldThisRun   = {0};
+        int[] boughtThisRun      = {0};
+        int[] soldThisRun        = {0};
+        int[] errorsThisRun      = {0};
+        int[] warnSkipsThisRun   = {0};
+        int[] maxPosSkipsThisRun = {0};
+        List<TradeRecord> boughtList  = new ArrayList<>();
+        List<TradeRecord> soldList    = new ArrayList<>();
+        List<SkipRecord>  skippedList = new ArrayList<>();
 
         log.info("[Engine] 전략 실행 시작 — 시장: {}, tickers: {}개, 전략: {}, 보유: {}개/{}개",
                 marketState, tickers.size(), activeStrategyNames, positions.size(), maxPositions);
 
+        // ── Phase 1: 전체 종목 평가 ──────────────────────────────────────────
+        // SELL·트레일링스탑·타임컷은 즉시 처리, BUY 후보는 수집만 한다.
+        List<BuyCandidate> buyQueue = new ArrayList<>();
         for (String ticker : tickers) {
             try {
-                runForTicker(ticker, candleDays, activeStrategyNames, positions, boughtThisRun, soldThisRun, maxPositions, marketState);
+                Optional<BuyCandidate> candidate = collectBuyCandidate(
+                        ticker, candleDays, activeStrategyNames, positions,
+                        soldThisRun, errorsThisRun, warnSkipsThisRun,
+                        soldList, skippedList, marketState);
+                candidate.ifPresent(buyQueue::add);
                 Thread.sleep(200); // KIS API Rate Limit 대응 (초당 5회 이하)
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
                 log.error("[Engine] 종목 처리 오류 — ticker: {}, error: {}", ticker, e.getMessage());
+                errorsThisRun[0]++;
             }
         }
 
-        log.info("[Engine] 전략 실행 완료 — 평가: {}개, 매수: {}건, 매도: {}건",
-                tickers.size(), boughtThisRun[0], soldThisRun[0]);
-        return new RunResult(tickers.size(), boughtThisRun[0], soldThisRun[0], false);
+        // 오늘 장 초기 지수 캡처 (당일 최초 1회)
+        try {
+            List<CandleDto> idxCandles = marketClient.getIndexCandles(
+                    strategyConfig.getMarketFilter().getIndexCode(), 2);
+            if (!idxCandles.isEmpty()) {
+                marketStateService.captureTodayOpenIndex(
+                        idxCandles.get(idxCandles.size() - 1).getClosePrice());
+            }
+        } catch (Exception e) {
+            log.warn("[Engine] 지수 캡처 실패: {}", e.getMessage());
+        }
+
+        // ── Phase 2: BUY 후보 score 내림차순 정렬 → 상위 maxPositions개만 매수 ──
+        buyQueue.sort(Comparator.comparingDouble(BuyCandidate::score).reversed());
+        if (!buyQueue.isEmpty()) {
+            log.info("[Engine] BUY 후보 {}개 수집 → score 기준 상위 {}개 실행 — {}",
+                    buyQueue.size(), maxPositions,
+                    buyQueue.stream()
+                            .map(c -> String.format("%s(%.1f)", c.signal().getTicker(), c.score()))
+                            .toList());
+        }
+
+        // Phase 2 result 추적용 map
+        Map<String, String> candidateResultMap = new java.util.LinkedHashMap<>();
+
+        for (BuyCandidate candidate : buyQueue) {
+            int effectivePositions = positions.size() + boughtThisRun[0];
+            if (effectivePositions >= maxPositions) {
+                // 슬롯 초과 — 나머지 후보 전부 스킵
+                log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
+                        effectivePositions, maxPositions, candidate.signal().getTicker());
+                recordSkipped(candidate.signal(), marketState, "MAX_POSITIONS");
+                maxPosSkipsThisRun[0]++;
+                skippedList.add(new SkipRecord(
+                        candidate.signal().getTicker(), candidate.signal().getStockName(), "최대보유"));
+                candidateResultMap.put(candidate.signal().getTicker(), "한도초과");
+                continue;
+            }
+
+            boolean traded = handleSignal(candidate.signal(), positions, marketState.name());
+            if (traded) {
+                boughtThisRun[0]++;
+                boughtList.add(new TradeRecord(
+                        candidate.signal().getTicker(),
+                        candidate.signal().getStockName(),
+                        candidate.signal().getPrice()));
+                candidateResultMap.put(candidate.signal().getTicker(), "매수");
+            } else {
+                candidateResultMap.put(candidate.signal().getTicker(), "예산부족");
+            }
+        }
+
+        // BUY 랭킹 저장 (buyQueue는 이미 score 내림차순 정렬됨)
+        int[] rank = {1};
+        lastBuyRanking = buyQueue.stream()
+                .limit(30)
+                .map(c -> new EvalRankEntry(
+                        rank[0]++,
+                        c.signal().getTicker(),
+                        c.signal().getStockName(),
+                        c.signal().getStrategyName(),
+                        c.score(),
+                        c.signal().getReason(),
+                        candidateResultMap.getOrDefault(c.signal().getTicker(), "대기")))
+                .collect(java.util.stream.Collectors.toList());
+        lastEvalAt = LocalDateTime.now();
+
+        log.info("[Engine] 전략 실행 완료 — 평가: {}개, BUY후보: {}개, 매수: {}건, 매도: {}건",
+                tickers.size(), buyQueue.size(), boughtThisRun[0], soldThisRun[0]);
+        return new RunResult(tickers.size(), boughtThisRun[0], soldThisRun[0], false,
+                errorsThisRun[0], warnSkipsThisRun[0], maxPosSkipsThisRun[0],
+                List.copyOf(boughtList), List.copyOf(soldList), List.copyOf(skippedList));
     }
 
-    private void runForTicker(String ticker, int candleDays,
-                               List<String> activeStrategyNames,
-                               List<PortfolioItemDto> positions,
-                               int[] boughtThisRun,
-                               int[] soldThisRun,
-                               int maxPositions,
-                               MarketState marketState) {
-        // 현재가 조회 (시가, 고가, 저가, 현재가 포함)
+    /**
+     * 종목 1개를 평가한다.
+     * SELL·트레일링스탑·타임컷은 즉시 처리, BUY는 후보로만 반환(Phase 2에서 정렬 후 실행).
+     * 동일 종목에서 여러 전략이 BUY를 내면 score 최고값을 반환한다.
+     */
+    private Optional<BuyCandidate> collectBuyCandidate(
+            String ticker, int candleDays,
+            List<String> activeStrategyNames,
+            List<PortfolioItemDto> positions,
+            int[] soldThisRun,
+            int[] errorsThisRun,
+            int[] warnSkipsThisRun,
+            List<TradeRecord> soldList,
+            List<SkipRecord> skippedList,
+            MarketState marketState) {
+        // 현재가 조회
         StockPriceDto priceData = marketClient.getCurrentPrice(ticker);
         if (priceData == null || priceData.getCurrentPrice() == null) {
             log.warn("[Engine] 현재가 조회 실패 — ticker: {}", ticker);
-            return;
+            return Optional.empty();
         }
 
         // 역사적 캔들 조회
         List<CandleDto> historical = marketClient.getCandles(ticker, candleDays);
         if (historical.isEmpty()) {
             log.warn("[Engine] 캔들 데이터 없음 — ticker: {}", ticker);
-            return;
+            return Optional.empty();
         }
 
-        // 오늘 라이브 캔들 생성 (현재가를 종가로, 시가/고가/저가는 당일 실시간값)
+        // 오늘 라이브 캔들 생성
         CandleDto liveCandle = CandleDto.builder()
                 .tradeDate(LocalDate.now())
                 .openPrice(priceData.getOpenPrice())
@@ -141,9 +262,10 @@ public class StrategyEngine {
                 .build();
 
         List<CandleDto> allCandles = new ArrayList<>(historical);
-        allCandles.add(liveCandle); // 오늘 라이브 캔들을 마지막에 추가
+        allCandles.add(liveCandle);
 
-        // 전략 실행
+        BuyCandidate bestBuy = null; // 이 종목의 최고 score BUY 후보
+
         for (TradingStrategy strategy : strategies) {
             if (!activeStrategyNames.contains(strategy.getName())) continue;
             if (allCandles.size() < strategy.minimumCandles()) {
@@ -158,37 +280,35 @@ public class StrategyEngine {
                 log.info("[Engine] 신호 — ticker: {}, strategy: {}, action: {}, reason: {}",
                         ticker, strategy.getName(), signal.getAction(), signal.getReason());
 
-                if (signal.isTradeSignal()) {
-                    if (signal.getAction() == SignalDto.Action.BUY) {
-                        // ① 시장경보 종목 BUY 스킵
-                        if (!priceData.isSafe()) {
-                            log.warn("[Engine] 시장경보 종목 — BUY 스킵 ticker: {}, warnCode: {}",
-                                    ticker, priceData.getMarketWarnCode());
-                            recordSkipped(signal, marketState, "MARKET_WARN");
-                            continue;
-                        }
-                        // ② 이미 보유 중이면 BUY 스킵
-                        boolean alreadyHolding = positions.stream()
-                                .anyMatch(p -> p.getTicker().equals(ticker));
-                        if (alreadyHolding) {
-                            log.info("[Engine] 이미 보유 중 — BUY 스킵 ticker: {}", ticker);
-                            continue;
-                        }
-                        // ③ 최대 보유 종목 수 도달 시 BUY 스킵
-                        int effectivePositions = positions.size() + boughtThisRun[0];
-                        if (effectivePositions >= maxPositions) {
-                            log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
-                                    effectivePositions, maxPositions, ticker);
-                            recordSkipped(signal, marketState, "MAX_POSITIONS");
-                            continue;
-                        }
-                    }
+                if (!signal.isTradeSignal()) continue;
 
+                if (signal.getAction() == SignalDto.Action.SELL) {
+                    // SELL은 즉시 처리
                     boolean traded = handleSignal(signal, positions, marketState.name());
-                    if (traded && signal.getAction() == SignalDto.Action.BUY) {
-                        boughtThisRun[0]++;
-                    } else if (traded && signal.getAction() == SignalDto.Action.SELL) {
+                    if (traded) {
                         soldThisRun[0]++;
+                        soldList.add(new TradeRecord(signal.getTicker(), signal.getStockName(), signal.getPrice()));
+                    }
+                } else { // BUY
+                    // ① 시장경보 종목 스킵
+                    if (!priceData.isSafe()) {
+                        log.warn("[Engine] 시장경보 종목 — BUY 스킵 ticker: {}, warnCode: {}",
+                                ticker, priceData.getMarketWarnCode());
+                        recordSkipped(signal, marketState, "MARKET_WARN");
+                        warnSkipsThisRun[0]++;
+                        skippedList.add(new SkipRecord(signal.getTicker(), signal.getStockName(), "시장경보"));
+                        continue;
+                    }
+                    // ② 이미 보유 중이면 스킵
+                    boolean alreadyHolding = positions.stream()
+                            .anyMatch(p -> p.getTicker().equals(ticker));
+                    if (alreadyHolding) {
+                        log.info("[Engine] 이미 보유 중 — BUY 스킵 ticker: {}", ticker);
+                        continue;
+                    }
+                    // ③ BUY 후보 등록 — 동일 종목에서 여러 전략이 BUY → score 최고값 채택
+                    if (bestBuy == null || signal.getScore() > bestBuy.score()) {
+                        bestBuy = new BuyCandidate(signal, allCandles, priceData);
                     }
                 }
             } catch (Exception e) {
@@ -196,14 +316,14 @@ public class StrategyEngine {
                         ticker, strategy.getName(), e.getMessage());
                 slackNotifier.sendError(String.format(
                         "ticker=%s, strategy=%s, %s", ticker, strategy.getName(), e.getMessage()));
+                errorsThisRun[0]++;
             }
         }
 
-        // 트레일링 스탑 체크 (보유 종목의 고점 대비 7% 하락 시 청산)
-        trailingStopService.check(ticker, priceData.getCurrentPrice(), positions);
-
-        // 타임 컷 체크 (RSI+볼린저 전략 3거래일 미반등 시 청산)
+        // 타임 컷 체크
         timeCutService.checkAndCut(ticker, priceData.getCurrentPrice(), positions);
+
+        return Optional.ofNullable(bestBuy);
     }
 
     /**

@@ -2,32 +2,96 @@ package com.axiom.market.service;
 
 import com.axiom.market.config.KisApiConfig;
 import com.axiom.market.dto.StockPriceDto;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.util.retry.Retry;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class KisMarketApiService {
 
     private final WebClient kisWebClient;
+    private final WebClient kisRealWebClient;
     private final KisApiConfig kisApiConfig;
     private final KisTokenService kisTokenService;
+
+    public KisMarketApiService(WebClient kisWebClient,
+                               @Qualifier("kisRealWebClient") WebClient kisRealWebClient,
+                               KisApiConfig kisApiConfig,
+                               KisTokenService kisTokenService) {
+        this.kisWebClient     = kisWebClient;
+        this.kisRealWebClient = kisRealWebClient;
+        this.kisApiConfig     = kisApiConfig;
+        this.kisTokenService  = kisTokenService;
+    }
+
+    /** ticker → 한글 종목명 캐시 (서비스 재시작 전까지 유지, 종목명은 변하지 않음) */
+    private final Map<String, String> stockNameCache = new ConcurrentHashMap<>();
 
     public StockPriceDto getCurrentPrice(String ticker) {
         if (kisApiConfig.isMock()) {
             return getMockPrice(ticker);
         }
         return getKisPrice(ticker);
+    }
+
+    /**
+     * real 서버 캔들 API(FHKST03010100) output1에서 종목명 조회.
+     * paper 서버는 hts_kor_isnm을 반환하지 않아 항상 real 서버를 사용한다.
+     * 성공 시에만 stockNameCache에 저장하여 실패값(ticker 자체)이 캐시되지 않도록 한다.
+     */
+    @SuppressWarnings("unchecked")
+    private String fetchStockNameFromRealApi(String ticker) {
+        KisApiConfig.ModeConfig realConfig = kisApiConfig.getReal();
+        String token = kisTokenService.getRealAccessToken();
+        if (token == null) {
+            log.warn("[KIS] real 토큰 없음 — 종목명 조회 스킵: {}", ticker);
+            return ticker;
+        }
+        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        try {
+            Map<String, Object> response = kisRealWebClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice")
+                            .queryParam("FID_COND_MRKT_DIV_CODE", "J")
+                            .queryParam("FID_INPUT_ISCD", ticker)
+                            .queryParam("FID_INPUT_DATE_1", today)
+                            .queryParam("FID_INPUT_DATE_2", today)
+                            .queryParam("FID_PERIOD_DIV_CODE", "D")
+                            .queryParam("FID_ORG_ADJ_PRC", "0")
+                            .build())
+                    .header("authorization", "Bearer " + token)
+                    .header("appkey",    realConfig.getAppKey())
+                    .header("appsecret", realConfig.getAppSecret())
+                    .header("tr_id",     "FHKST03010100")
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
+
+            Map<String, String> output1 = (Map<String, String>) response.get("output1");
+            if (output1 != null) {
+                String name = output1.getOrDefault("hts_kor_isnm", "").strip();
+                if (!name.isEmpty()) {
+                    log.info("[KIS] 종목명 조회 완료 (real 캔들 API) — ticker: {}, name: {}", ticker, name);
+                    return name;
+                }
+                log.warn("[KIS] real 캔들 API output1에 hts_kor_isnm 없음 — keys: {}", output1.keySet());
+            }
+        } catch (Exception e) {
+            log.warn("[KIS] 종목명 조회 실패 (real 캔들 API) — ticker: {}, error: {}", ticker, e.getMessage());
+        }
+        return ticker;
     }
 
     // ── Mock ────────────────────────────────────────────────────────────────
@@ -100,8 +164,18 @@ public class KisMarketApiService {
         BigDecimal changeAmount = new BigDecimal(output.get("prdy_vrss"));
         BigDecimal changeRate   = new BigDecimal(output.get("prdy_ctrt"));
 
-        // 종목명: hts_kor_isnm (HTS 한글 종목명) 사용, 없으면 ticker 반환
-        String stockName = output.getOrDefault("hts_kor_isnm", ticker);
+        // 종목명: hts_kor_isnm (HTS 한글 종목명) 사용, 없으면 real 캔들 API로 fallback
+        // 실패값(ticker 자체)은 캐시하지 않아 재시도 가능하도록 한다
+        String stockName = output.getOrDefault("hts_kor_isnm", "").strip();
+        if (stockName.isEmpty()) {
+            stockName = stockNameCache.get(ticker);
+            if (stockName == null) {
+                stockName = fetchStockNameFromRealApi(ticker);
+                if (!stockName.equals(ticker)) {
+                    stockNameCache.put(ticker, stockName);
+                }
+            }
+        }
 
         // 시장경보코드: "00"=정상, "01"=투자주의, "02"=투자경고, "03"=투자위험
         String marketWarnCode = output.getOrDefault("mrkt_warn_cls_code", "00");

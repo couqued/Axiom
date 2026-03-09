@@ -46,10 +46,6 @@ export const refreshMarketState = () =>
 export const runStrategy = () =>
   request('/api/strategy/run', { method: 'POST' })
 
-// Slack 알림 테스트
-export const testSlack = () =>
-  request('/api/strategy/test-slack', { method: 'POST' })
-
 // 관리자 — 현재 상태 조회
 export const getAdminStatus = () =>
   request('/api/strategy/admin/status')
@@ -77,3 +73,6 @@ export const getTimeCutStatus = () =>
 // 투자 스킵 종목 목록 (최근 N일, 기본 7일)
 export const getSkippedSignals = (days = 7) =>
   request(`/api/orders/skipped?days=${days}`)
+
+// BUY 랭킹 조회 (마지막 전략 실행 기준)
+export const getEvalRanking = () => request('/api/strategy/eval-ranking')

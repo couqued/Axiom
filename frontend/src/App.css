@@ -295,18 +295,6 @@
 }
 .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.slack-btn {
-  padding: 13px;
-  background: #0d1a2d;
-  color: #7dccff;
-  border: 1px solid #1a3d6e;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.slack-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
 .result-msg {
   margin-top: 10px;
   font-size: 13px;
@@ -951,4 +939,92 @@ body {
   background: #222;
   padding: 1px 5px;
   border-radius: 8px;
+}
+
+/* 지수 정보 행 */
+.index-info-row {
+  display: flex;
+  gap: 16px;
+  margin: 10px 0 12px;
+  flex-wrap: wrap;
+}
+.index-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 80px;
+}
+.index-info-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.7);
+}
+.index-info-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* BUY 랭킹 */
+.ranking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ranking-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border-left: 3px solid #3498db;
+}
+.ranking-rank {
+  font-size: 12px;
+  font-weight: 700;
+  color: #7f8c8d;
+  min-width: 28px;
+}
+.ranking-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ranking-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #2c3e50;
+}
+.ranking-ticker {
+  font-size: 11px;
+  color: #7f8c8d;
+}
+.ranking-strategy {
+  font-size: 11px;
+  color: #fff;
+  background: #8e44ad;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+.ranking-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ranking-score {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e74c3c;
+  min-width: 48px;
+  text-align: right;
+}
+.ranking-result {
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 42px;
+  text-align: center;
 }

@@ -62,13 +62,22 @@ public class RsiBollingerStrategy implements TradingStrategy {
 
         // 매수: RSI 과매도 AND 볼린저 하단밴드 이탈
         if (rsi < RSI_OVERSOLD && currentPrice.compareTo(bb.lower) < 0) {
+            // score: RSI 과매도 깊이(0~50) + 밴드 이탈 깊이(0~50)
+            double rsiScore = Math.min((RSI_OVERSOLD - rsi) / RSI_OVERSOLD, 1.0) * 50;
+            double bandGapPct = bb.lower.subtract(currentPrice)
+                    .divide(bb.lower, 6, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+            double bandScore = Math.min(bandGapPct / 5.0, 1.0) * 50; // cap: 하단밴드 5% 이탈 = 50점
+            double score = rsiScore + bandScore;
+
             return SignalDto.builder()
                     .action(SignalDto.Action.BUY)
                     .ticker(ticker)
                     .price(currentPrice)
                     .strategyName(getName())
-                    .reason(String.format("과매도 진입 — RSI(%.1f) < %.0f & 종가(%.0f) < 하단밴드(%.0f)",
-                            rsi, RSI_OVERSOLD, currentPrice.doubleValue(), bb.lower.doubleValue()))
+                    .score(score)
+                    .reason(String.format("과매도 진입 — RSI(%.1f) < %.0f & 종가(%.0f) < 하단밴드(%.0f) [score=%.1f]",
+                            rsi, RSI_OVERSOLD, currentPrice.doubleValue(), bb.lower.doubleValue(), score))
                     .signalAt(LocalDateTime.now())
                     .build();
         }

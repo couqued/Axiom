@@ -1,9 +1,12 @@
 package com.axiom.strategy.notification;
 
 import com.axiom.strategy.dto.SignalDto;
+import com.axiom.strategy.engine.StrategyEngine;
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -98,6 +101,87 @@ public class SlackNotifier {
                 success ? "성공" : "실패"
         );
         send(text);
+    }
+
+    /**
+     * 08:30 감시종목 갱신 결과 알림.
+     */
+    public void sendSchedulerScreenerRefresh(int tickerCount, String marketState) {
+        String text = String.format(
+                "📋 *[08:30 감시종목갱신]* 완료\n" +
+                "> 감시 종목: %d개  |  시장 상태: %s",
+                tickerCount, marketState
+        );
+        send(text);
+    }
+
+    /**
+     * 09:05 오버나이트청산 결과 알림.
+     */
+    public void sendOvernightExitResult(boolean hasTarget, int exitCount, boolean anyFailed,
+                                        List<OvernightExitItem> items) {
+        String text;
+        if (!hasTarget) {
+            text = "📋 *[09:05 오버나이트청산]* 대상 없음";
+        } else {
+            StringBuilder sb = new StringBuilder(String.format(
+                    "🔔 *[09:05 오버나이트청산]* 완료\n" +
+                    "> 청산 종목: %d개  |  결과: %s",
+                    exitCount, anyFailed ? "일부 실패 ❌" : "전체 성공 ✅"
+            ));
+            for (OvernightExitItem item : items) {
+                sb.append(String.format("\n> %s | 매수가: %s원 | 매도 주문가: %s원 | %s",
+                        formatStock(item.stockName(), item.ticker()),
+                        formatPrice(item.avgPrice()),
+                        formatPrice(item.orderPrice()),
+                        item.success() ? "✅" : "❌"));
+            }
+            text = sb.toString();
+        }
+        send(text);
+    }
+
+    public record OvernightExitItem(String ticker, String stockName,
+                                    BigDecimal avgPrice, BigDecimal orderPrice, boolean success) {}
+
+    /**
+     * 15:25 전략 일일 요약 알림.
+     */
+    public void sendDailyStrategySummary(int runs, int evaluated, int bought, int sold,
+                                         int errors, int skippedMarketWarn, int skippedMaxPositions,
+                                         List<StrategyEngine.TradeRecord> boughtList,
+                                         List<StrategyEngine.TradeRecord> soldList,
+                                         List<StrategyEngine.SkipRecord> skippedList) {
+        String date = java.time.LocalDate.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+        StringBuilder sb = new StringBuilder(String.format(
+                "📊 *[전략 일일 요약]* %s\n" +
+                "> 실행 횟수: %d회 (09:05 ~ 15:20)\n" +
+                "> 평가 종목: %d개 × %d회\n" +
+                "> 매수: %d건  |  매도: %d건  |  오류: %d건\n" +
+                "> 스킵(시장경보): %d건  |  스킵(최대보유): %d건",
+                date, runs, evaluated, runs, bought, sold, errors,
+                skippedMarketWarn, skippedMaxPositions
+        ));
+        if (!boughtList.isEmpty()) {
+            String names = boughtList.stream()
+                    .map(r -> formatStock(r.stockName(), r.ticker()) + " " + formatPrice(r.price()) + "원")
+                    .collect(Collectors.joining(", "));
+            sb.append("\n> 매수 종목: ").append(names);
+        }
+        if (!soldList.isEmpty()) {
+            String names = soldList.stream()
+                    .map(r -> formatStock(r.stockName(), r.ticker()) + " " + formatPrice(r.price()) + "원")
+                    .collect(Collectors.joining(", "));
+            sb.append("\n> 매도 종목: ").append(names);
+        }
+        if (!skippedList.isEmpty()) {
+            String names = skippedList.stream()
+                    .map(r -> formatStock(r.stockName(), r.ticker()) + "(" + r.reason() + ")")
+                    .collect(Collectors.joining(", "));
+            sb.append("\n> 스킵 종목: ").append(names);
+        }
+        send(sb.toString());
     }
 
     /**

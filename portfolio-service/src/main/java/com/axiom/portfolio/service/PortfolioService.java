@@ -42,6 +42,7 @@ public class PortfolioService {
             BigDecimal newTotalInvest = p.getTotalInvest().add(newInvest);
             BigDecimal newAvgPrice = newTotalInvest.divide(BigDecimal.valueOf(newQuantity), 2, RoundingMode.HALF_UP);
 
+            p.setStockName(stockName);
             p.setQuantity(newQuantity);
             p.setTotalInvest(newTotalInvest);
             p.setAvgPrice(newAvgPrice);

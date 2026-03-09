@@ -56,13 +56,23 @@ public class GoldenCrossStrategy implements TradingStrategy {
 
         // 골든크로스: 전일 MA5 ≤ MA20, 당일 MA5 > MA20
         if (ma5Prev.compareTo(ma20Prev) <= 0 && ma5Curr.compareTo(ma20Curr) > 0) {
+            // score: MA 이격률(0~50) + 거래량 급증(0~50)
+            double maGapPct = ma5Curr.subtract(ma20Curr)
+                    .divide(ma20Curr, 6, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+            double avgVol  = avgVolume(candles);
+            double volRatio = avgVol > 0 ? candles.get(size - 1).getVolume() / avgVol : 1.0;
+            double score = Math.min(maGapPct / 1.0, 1.0) * 50   // cap: MA 이격 1% = 50점
+                         + Math.min(volRatio  / 3.0, 1.0) * 50; // cap: 3배 거래량 = 50점
+
             return SignalDto.builder()
                     .action(SignalDto.Action.BUY)
                     .ticker(ticker)
                     .price(currentPrice)
                     .strategyName(getName())
-                    .reason(String.format("골든크로스 — MA%d(%.0f) > MA%d(%.0f)",
-                            SHORT_PERIOD, ma5Curr, LONG_PERIOD, ma20Curr))
+                    .score(score)
+                    .reason(String.format("골든크로스 — MA%d(%.0f) > MA%d(%.0f) [score=%.1f]",
+                            SHORT_PERIOD, ma5Curr, LONG_PERIOD, ma20Curr, score))
                     .signalAt(LocalDateTime.now())
                     .build();
         }
@@ -89,6 +99,19 @@ public class GoldenCrossStrategy implements TradingStrategy {
                         SHORT_PERIOD, ma5Curr, LONG_PERIOD, ma20Curr))
                 .signalAt(LocalDateTime.now())
                 .build();
+    }
+
+    /** 최근 20거래일(라이브 캔들 제외) 평균 거래량. 데이터 없으면 1.0 반환. */
+    private double avgVolume(List<CandleDto> candles) {
+        int end   = candles.size() - 2; // 라이브 캔들 제외
+        int start = Math.max(0, end - 19);
+        long sum  = 0;
+        int  cnt  = 0;
+        for (int i = start; i <= end; i++) {
+            sum += candles.get(i).getVolume();
+            cnt++;
+        }
+        return cnt == 0 ? 1.0 : (double) sum / cnt;
     }
 
     /**

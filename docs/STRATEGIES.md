@@ -15,6 +15,9 @@
 7. [타임 컷](#7-타임-컷)
 8. [스케줄러 전체 구조](#8-스케줄러-전체-구조)
 9. [설정 방법](#9-설정-방법)
+10. [포지션 사이징](#10-포지션-사이징)
+11. [종목 선정 우선순위 점수화 \[계획\]](#11-종목-선정-우선순위-점수화-계획)
+12. [하락장(BEARISH) 전략 \[계획\]](#12-하락장bearish-전략-계획)
 
 ---
 
@@ -42,9 +45,14 @@
   BULLISH  → 변동성 돌파 + 골든크로스 (동시 실행)
   SIDEWAYS → RSI + 볼린저밴드 통합 전략
     ↓
-[포지션 사이징 + BUY 가드]
-    → 수량 = floor(50만 원 / 현재가)
-    → ① 시장경보 종목 스킵 → ② 이미 보유 중 스킵 → ③ maxPositions(3) 초과 스킵
+[Phase 1: 전체 종목 평가]
+    SELL·트레일링 스탑·타임 컷 → 즉시 처리
+    BUY → score 계산 후 buyQueue 수집 (① 시장경보 스킵 ② 보유 중 스킵)
+    ↓
+[Phase 2: BUY score 정렬 → 상위 maxPositions개 매수]
+    buyQueue.sort(score 내림차순)
+    ③ maxPositions(3) 초과 시 스킵 (MAX_POSITIONS)
+    수량 = floor(investAmountKrw / 현재가), 0주이면 BUDGET_INSUFFICIENT 스킵
     ↓
 [공통 리스크 관리]
     → 트레일링 스탑: 고점 -7% 하락 시 자동 청산
@@ -85,13 +93,17 @@ historicalCandles[0..N-1] + LiveCandle(오늘시가, 현재가=종가, 장중고
 ### 판별 로직
 
 ```
-코스피(0001) 지수 최근 20일 캔들 조회
+코스피(0001) 지수 최근 20일 캔들 조회  ← IndexCandleService (항상 KIS real 서버 사용)
   ↓
 MA20 = 최근 20개 종가의 단순 이동평균(SMA)
   ↓
 마지막 종가 > MA20 → BULLISH (상승장)
 마지막 종가 ≤ MA20 → SIDEWAYS (횡보장)
 ```
+
+> **지수 데이터는 항상 KIS real 서버에서 조회합니다.**
+> paper 서버가 지수 API에서 10일 이상 지연된 잘못된 데이터를 반환하는 문제를 우회합니다.
+> `KIS_REAL_APP_KEY`, `KIS_REAL_APP_SECRET`이 미설정이면 mock 데이터로 폴백합니다.
 
 ### 특징
 
@@ -184,14 +196,16 @@ Range  = yesterday.highPrice - yesterday.lowPrice  (전일 변동폭)
 
 ### 재시작 복구 (todayBought)
 
-서비스 재시작 시 `todayBought`가 초기화되면 15:20 ForceExit가 오버나이트 종목을 인식하지 못합니다. 이를 방지하기 위해 `MarketStateScheduler.@PostConstruct`에서 order-service 이력을 기반으로 복구합니다.
+서비스 재기동 시 `@PostConstruct initFromDb()`에서 `strategy.strategy_state` 테이블(type=TODAY_BOUGHT)을 직접 조회하여 즉시 복구합니다.
 
 ```
-initOnStartup() (@PostConstruct)
-  → orderClient.getFilledOrders() 조회
-  → 오늘 날짜 + volatility-breakout + BUY + FILLED 건
-  → todayBought.putIfAbsent(ticker, buyDate)
+initFromDb() (@PostConstruct)
+  → stateStore.loadAllTodayBought()
+  ← strategy.strategy_state WHERE type='TODAY_BOUGHT'
+  → todayBought.putAll(loaded)
 ```
+
+> order-service/portfolio-service 기동 순서에 무관. 자체 DB에서 직접 복구.
 
 ### 강제 청산 (ForceExitScheduler)
 
@@ -221,7 +235,9 @@ exitOvernightPositions() — cron: 0 5 9 * * MON-FRI
      - orderType = BUY + status = FILLED
      - 매수일 = todayBought에 기록된 날짜
   ③ portfolio-service에서 실제 보유 확인
-  ④ 검증 통과 종목만 SELL 주문 + Slack 알림
+  ④ 검증 통과 종목만 SELL 주문
+     → 대상 없으면: Slack "📋 [09:05 오버나이트청산] 대상 없음"
+     → 청산 완료: Slack "🔔 [09:05 오버나이트청산] 완료" + 종목별 매수가·결과
   ⑤ 처리 완료 후 todayBought에서 제거
 ```
 
@@ -315,9 +331,11 @@ stopPrice = peakPrice × (1 - 7/100)   ← 청산 기준가
 ### 고점 초기화 및 재시작 복구
 
 - `peakPrices`는 `ConcurrentHashMap<String, BigDecimal>`에 저장 (메모리)
-- **재시작 복구**: `@PostConstruct initFromPortfolio()` 실행 → portfolio-service의 `avgPrice`로 즉시 초기화
-  (avgPrice는 보수적 초기값, 다음 체크 시 실제 현재가로 자동 갱신)
-- 보유 포지션 없는 종목은 자동으로 제외됨
+- 상태 변경 시마다 `strategy.strategy_state` 테이블(type=PEAK_PRICE)에 즉시 동기화
+- **재시작 복구**: `@PostConstruct initFromPortfolio()`에서 DB 직접 로드 (타 서비스 기동 순서 무관)
+  - 고점 갱신: 실제 값이 변경된 경우에만 DB write (불필요한 write 방지)
+  - 복구 후 다음 체크 시 현재가가 더 높으면 자동으로 고점 갱신
+- 보유 포지션 없는 종목은 자동으로 제외됨 (check() 내에서 DB도 동시 삭제)
 
 ### 현황 조회 API
 
@@ -370,9 +388,10 @@ tradingDaysBetween(Monday, Thursday)  = 3   // 강제 청산!
 ### 재시작 복구
 
 - `buyDates`는 `ConcurrentHashMap<String, LocalDate>`에 저장 (메모리)
-- **재시작 복구**: `@PostConstruct initFromOrders()` 실행
-  → order-service에서 FILLED BUY 이력 조회
-  → 현재 보유 중인 종목 중 `rsi-bollinger` 전략 매수 건의 매수일 자동 복구
+- 상태 변경 시마다 `strategy.strategy_state` 테이블(type=BUY_DATE)에 즉시 동기화
+- **재시작 복구**: `@PostConstruct initFromOrders()`에서 DB 직접 로드 (타 서비스 기동 순서 무관)
+  - order-service/portfolio-service HTTP 호출 없이 자체 DB에서 즉시 복구
+  - `recordBuy()` 호출 시 메모리 + DB 동시 저장, `clearBuy()` 시 메모리 + DB 동시 삭제
 
 ### 현황 조회 API
 
@@ -391,17 +410,51 @@ GET /api/strategy/admin/time-cut-status
 
 ## 8. 스케줄러 전체 구조
 
-| Cron | 클래스 | 역할 |
-|------|--------|------|
-| `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 캐싱 |
-| `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 |
-| `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략 검증 포함) |
-| `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 |
-| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) |
-| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 |
-| `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) |
+| Cron | 클래스 | 역할 | Slack 알림 |
+|------|--------|------|-----------|
+| `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 캐싱 | — |
+| `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 | 📋 감시종목 수 + 시장 상태 |
+| `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략 검증 포함) | 🔔 종목별 매수가·매도 주문가 포함 / 대상 없으면 "대상 없음" |
+| `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 | — (15:25 일일 요약으로 취합) |
+| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) | — (발동 시만 🛑 알림) |
+| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 | 🔔 종목별 개별 알림 |
+| `0 25 15 * * MON-FRI` | `DailySummaryCollector` | 전략 실행 일일 요약 발송 + 카운터 초기화 | 📊 일일 요약 (실행횟수·매수·매도·스킵 종목 포함) |
+| `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) | — |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작
+
+### Slack 알림 상세
+
+#### 08:30 감시종목 갱신
+```
+📋 [08:30 감시종목갱신] 완료
+> 감시 종목: 107개  |  시장 상태: BULLISH
+```
+
+#### 09:05 오버나이트 청산
+```
+📋 [09:05 오버나이트청산] 대상 없음                    ← 대상 없을 때
+
+🔔 [09:05 오버나이트청산] 완료                         ← 청산 시
+> 청산 종목: 2개  |  결과: 전체 성공 ✅
+> 삼성전자 (005930) | 매수가: 78,900원 | 매도 주문가: 78,900원 | ✅
+> SK하이닉스 (000660) | 매수가: 195,000원 | 매도 주문가: 195,000원 | ✅
+```
+> 매수가 = `avgPrice` (portfolio-service 평균매수가), 매도 주문가 = 동일 (시장가 주문 참조가). 실제 체결가는 OrderResult에 포함되지 않음.
+
+#### 15:25 전략 일일 요약
+```
+📊 [전략 일일 요약] 2026-03-09
+> 실행 횟수: 75회 (09:05 ~ 15:20)
+> 평가 종목: 107개 × 75회
+> 매수: 2건  |  매도: 1건  |  오류: 0건
+> 스킵(시장경보): 1건  |  스킵(최대보유): 3건
+> 매수 종목: 삼성전자 (005930) 78,900원, SK하이닉스 (000660) 195,000원
+> 매도 종목: NAVER (035420) 212,000원
+> 스킵 종목: 카카오 (035720)(시장경보), 현대차 (005380)(최대보유)
+```
+
+`DailySummaryCollector`가 `StrategyScheduler` 실행마다 `RunResult`를 누적하고, 15:25에 한 번에 발송 후 카운터를 초기화합니다.
 
 ### StrategyScheduler 상세
 
@@ -618,3 +671,157 @@ if (effective >= maxPositions) skip;  // 실시간 카운터로 초과 방지
 | 투자경고 종목 BUY 신호 | **스킵** (시장경보) |
 | SELL 신호, 보유 6주 | portfolio에서 6주 조회 → **6주 전량 매도** |
 | SELL 신호, 보유 없음 | **스킵** |
+
+---
+
+## 11. 종목 선정 우선순위 점수화
+
+### 개요
+
+BUY 신호가 발생한 종목 전체를 score 기준으로 정렬하여 **가장 강한 신호 상위 3종목만 실제 매수**합니다.
+
+### 구현 구조
+
+#### `SignalDto.score` 필드
+
+```java
+private double score; // BUY 신호 강도 점수 (0~100). SELL/HOLD = 0
+```
+
+#### 전략별 score 계산 (0~100점)
+
+| 전략 | 점수 구성 | 각 항목 상한 |
+|------|----------|------------|
+| **변동성 돌파** | 돌파 강도(0~50) + 거래량 급증(0~50) | 돌파율 2% = 50점, 거래량 3배 = 50점 |
+| **골든크로스** | MA 이격률(0~50) + 거래량 급증(0~50) | 이격 1% = 50점, 거래량 3배 = 50점 |
+| **RSI+볼린저** | RSI 과매도 깊이(0~50) + 밴드 이탈 깊이(0~50) | RSI=0 = 50점, 하단밴드 5% 이탈 = 50점 |
+
+```
+변동성 돌파 score:
+  breakoutPct = (현재가 - 목표가) / 목표가 × 100
+  volRatio    = 오늘거래량 / 최근20일평균거래량
+  score = min(breakoutPct/2, 1) × 50 + min(volRatio/3, 1) × 50
+
+골든크로스 score:
+  maGapPct = (MA5 - MA20) / MA20 × 100
+  volRatio = 오늘거래량 / 최근20일평균거래량
+  score = min(maGapPct/1, 1) × 50 + min(volRatio/3, 1) × 50
+
+RSI+볼린저 score:
+  rsiScore  = min((30 - RSI) / 30, 1) × 50
+  bandScore = min((하단밴드 - 현재가) / 하단밴드 × 100 / 5, 1) × 50
+  score = rsiScore + bandScore
+```
+
+#### `StrategyEngine` 2단계 처리
+
+```
+Phase 1 — 전체 종목 순회:
+  SELL 신호     → 즉시 처리 (지연 없음)
+  트레일링 스탑  → 즉시 처리 (지연 없음)
+  타임 컷       → 즉시 처리 (지연 없음)
+  BUY 신호      → 가드 ①②(시장경보·중복보유) 통과 시 buyQueue에 수집
+                   동일 종목 여러 전략 BUY → score 최고값 채택
+
+Phase 2 — BUY 실행:
+  buyQueue.sort(score 내림차순)
+  로그: "[Engine] BUY 후보 N개 수집 → score 기준 상위 3개 실행 — [005930(87.3), 000660(72.1), ...]"
+  상위부터 순서대로 가드 ③(최대보유 수) 체크 → 통과 시 주문 실행
+```
+
+### 특징
+
+- **SELL·리스크 관리는 즉시 처리** — BUY만 랭킹 적용, 청산 지연 없음
+- **동일 종목 중복 방지** — BULLISH 시 golden-cross + volatility-breakout 둘 다 BUY 신호 내도 score 높은 전략 1개만 채택
+- `reason` 필드에 `[score=XX.X]` 포함 → 로그 및 Slack 알림에서 확인 가능
+
+---
+
+## 12. 하락장(BEARISH) 전략 [계획]
+
+### 현재 문제
+
+시장 상태가 BULLISH / SIDEWAYS 2단계뿐이어서, 코스피가 MA20 아래로 크게 하락한 경우에도 SIDEWAYS로 분류되어 RSI+볼린저밴드 전략이 실행됩니다.
+강한 하락 추세에서 RSI+볼린저밴드 전략은 추가 하락 구간에서 계속 매수 신호를 내어 손실이 누적될 수 있습니다.
+
+### Step 1: 3단계 시장 상태 도입
+
+```java
+public enum MarketState {
+    BULLISH,   // 상승장: 종가 > MA20
+    SIDEWAYS,  // 횡보장: MA20 × 0.97 ≤ 종가 ≤ MA20
+    BEARISH    // 하락장: 종가 < MA20 × 0.97  (MA20 대비 3% 이상 하락)
+}
+```
+
+| 조건 | 상태 |
+|------|------|
+| 종가 > MA20 | BULLISH |
+| MA20 × 0.97 ≤ 종가 ≤ MA20 | SIDEWAYS |
+| 종가 < MA20 × 0.97 | BEARISH |
+
+> 3% 기준은 조정 가능 (`market-filter.bearish-threshold: 0.03`).
+
+### Step 2: BEARISH 상태에서의 동작 옵션
+
+#### 옵션 A: 매수 중단 (가장 보수적) ← **1차 구현 권장**
+
+BEARISH 상태에서 BUY 신호를 모두 무시합니다. SELL 신호·트레일링 스탑·타임 컷은 정상 동작합니다.
+
+```
+BEARISH → 신규 BUY 없음 (현금 보유)
+         → 기존 포지션 청산 로직은 계속 동작 (손실 최소화)
+```
+
+```java
+// StrategyEngine.run() 변경
+if (marketState == MarketState.BEARISH && signal.isBuy()) {
+    // BUY 스킵, skip_reason = "BEARISH_MARKET" 기록
+    continue;
+}
+```
+
+#### 옵션 B: 인버스 ETF 전략 ← **2차 구현 검토**
+
+하락장에서 인버스 ETF를 매수하여 시장 하락 수익을 추구합니다.
+
+| ETF | 코드 | 설명 |
+|-----|------|------|
+| KODEX 200 인버스 | `114800` | 코스피200 역방향 추종 |
+| KODEX 코스닥150 인버스 | `251340` | 코스닥150 역방향 추종 |
+
+```
+BEARISH → BearMarketInverseEtfStrategy 실행
+  → 인버스 ETF 매수 (변동성 돌파 유사 로직 or 단순 시장 상태 진입)
+  → 시장 상태가 SIDEWAYS/BULLISH 복귀 시 인버스 ETF 매도
+```
+
+#### 옵션 C: 트레일링 스탑 강화 (하락장 자동 축소)
+
+BEARISH 상태 진입 시 트레일링 스탑 퍼센트를 자동으로 줄여 더 빠른 손절을 유도합니다.
+
+```java
+// MarketStateService에서 상태 변경 시
+if (newState == MarketState.BEARISH) {
+    adminConfigStore.setTrailingStopPct(
+        Math.min(adminConfigStore.getTrailingStopPct(), 4.0)  // 최대 4%로 축소
+    );
+}
+```
+
+### Step 3: Slack 알림 추가
+
+```
+🐻 [시장 상태] BEARISH 진입 — 코스피 X,XXX pt (MA20 대비 -X.X%)
+> 신규 매수 중단. 기존 포지션 청산 전략 계속 동작.
+```
+
+### 구현 우선순위
+
+| 단계 | 내용 | 난이도 |
+|------|------|--------|
+| 1 | `MarketState.BEARISH` enum 추가 + 판별 로직 수정 | 낮음 |
+| 2 | `StrategyEngine`에서 BEARISH 시 BUY 스킵 처리 | 낮음 |
+| 3 | BEARISH 진입/복귀 Slack 알림 | 낮음 |
+| 4 | BEARISH 시 트레일링 스탑 자동 강화 | 중간 |
+| 5 | `BearMarketInverseEtfStrategy` 구현 | 높음 |

@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -31,8 +33,38 @@ public class MarketStateService {
     /** 현재 시장 상태 (기본값: SIDEWAYS — 안전 우선) */
     private final AtomicReference<MarketState> currentState = new AtomicReference<>(MarketState.SIDEWAYS);
 
+    // 지수 스냅샷 — 08:30 refresh() 시 저장
+    private volatile BigDecimal yesterdayClose;
+    private volatile BigDecimal ma20;
+
+    // 오늘 장 시작 초기 지수 — 당일 첫 StrategyEngine.run() 시 저장
+    private volatile BigDecimal todayOpenIndex;
+    private volatile LocalDate  todayOpenDate;
+
+    public record IndexSnapshot(
+            BigDecimal yesterdayClose,
+            BigDecimal ma20,
+            BigDecimal todayOpenIndex
+    ) {}
+
     public MarketState getCurrentState() {
         return currentState.get();
+    }
+
+    public IndexSnapshot getIndexSnapshot() {
+        return new IndexSnapshot(yesterdayClose, ma20, todayOpenIndex);
+    }
+
+    /**
+     * StrategyEngine.run() 시작 시 호출 — 당일 최초 1회만 저장 (9:05 AM 스냅샷).
+     */
+    public void captureTodayOpenIndex(BigDecimal price) {
+        LocalDate today = LocalDate.now();
+        if (todayOpenDate == null || !todayOpenDate.equals(today)) {
+            todayOpenIndex = price;
+            todayOpenDate  = today;
+            log.info("[MarketState] 오늘 장 초기 지수 저장 — {}: {}", today, price);
+        }
     }
 
     /**
@@ -68,6 +100,12 @@ public class MarketStateService {
                 .divide(BigDecimal.valueOf(maPeriod), 2, RoundingMode.HALF_UP);
 
         BigDecimal lastClose = candles.get(candles.size() - 1).getClosePrice();
+
+        // 지수 스냅샷 저장
+        this.yesterdayClose = lastClose;
+        this.ma20           = ma;
+        // refresh 시 todayOpenIndex 초기화 → 다음 전략 실행 시 당일 최신값으로 재캡처
+        this.todayOpenDate  = null;
 
         MarketState newState = lastClose.compareTo(ma) > 0 ? MarketState.BULLISH : MarketState.SIDEWAYS;
         MarketState oldState = currentState.getAndSet(newState);

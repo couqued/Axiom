@@ -9,6 +9,7 @@ data:
     CREATE SCHEMA IF NOT EXISTS market;
     CREATE SCHEMA IF NOT EXISTS orders;
     CREATE SCHEMA IF NOT EXISTS portfolio;
+    CREATE SCHEMA IF NOT EXISTS strategy;
 ---
 # ── PersistentVolumeClaim ─────────────────────────────────────
 apiVersion: v1

@@ -2,16 +2,19 @@ package com.axiom.strategy.strategy;
 
 import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.SignalDto;
+import com.axiom.strategy.persistence.StrategyStateStore;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /**
  * 변동성 돌파 전략 (상승장 단기 매매).
@@ -22,12 +25,25 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class VolatilityBreakoutStrategy implements TradingStrategy {
 
     private static final double K = 0.5; // 변동성 계수 (0.3~0.7 범위, 0.5가 표준)
 
+    private final StrategyStateStore stateStore;
+
     /** 당일 매수 종목 추적 (ticker → 매수일). ForceExitScheduler에서도 참조. */
     private final Map<String, LocalDate> todayBought = new ConcurrentHashMap<>();
+
+    @PostConstruct
+    public void initFromDb() {
+        try {
+            todayBought.putAll(stateStore.loadAllTodayBought());
+            log.info("[VolBreakout] DB에서 todayBought 복구 — {}개", todayBought.size());
+        } catch (Exception e) {
+            log.warn("[VolBreakout] DB todayBought 복구 실패: {}", e.getMessage());
+        }
+    }
 
     @Override
     public String getName() {
@@ -60,14 +76,24 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
         }
 
         if (currentPrice.compareTo(targetPrice) >= 0) {
+            // score: 돌파 강도(0~50) + 거래량 급증(0~50)
+            double breakoutPct = currentPrice.subtract(targetPrice)
+                    .divide(targetPrice, 6, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+            double avgVol  = avgVolume(candles);
+            double volRatio = avgVol > 0 ? today.getVolume() / avgVol : 1.0;
+            double score = Math.min(breakoutPct / 2.0, 1.0) * 50   // cap: 2% 돌파 = 50점
+                         + Math.min(volRatio    / 3.0, 1.0) * 50;  // cap: 3배 거래량 = 50점
+
             return SignalDto.builder()
                     .action(SignalDto.Action.BUY)
                     .ticker(ticker)
                     .price(currentPrice)
                     .strategyName(getName())
-                    .reason(String.format("변동성 돌파 — 현재(%.0f) ≥ 목표(%.0f) = 시가(%.0f) + Range(%.0f)×%.1f",
+                    .score(score)
+                    .reason(String.format("변동성 돌파 — 현재(%.0f) ≥ 목표(%.0f) = 시가(%.0f) + Range(%.0f)×%.1f [score=%.1f]",
                             currentPrice.doubleValue(), targetPrice.doubleValue(),
-                            today.getOpenPrice().doubleValue(), range.doubleValue(), K))
+                            today.getOpenPrice().doubleValue(), range.doubleValue(), K, score))
                     .signalAt(LocalDateTime.now())
                     .build();
         }
@@ -89,26 +115,27 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
      * StrategyEngine에서 호출.
      */
     public void markBought(String ticker) {
-        todayBought.put(ticker, LocalDate.now());
+        LocalDate today = LocalDate.now();
+        todayBought.put(ticker, today);
+        stateStore.saveTodayBought(ticker, today);
     }
 
-    /**
-     * 서비스 재시작 시 todayBought 복구.
-     * order-service 주문 이력에서 오늘 volatility-breakout으로 FILLED된 BUY를 찾아 등록.
-     * MarketStateScheduler @PostConstruct에서 호출.
-     */
-    public void restoreFromOrders(List<com.axiom.strategy.dto.OrderSummaryDto> orders) {
-        LocalDate today = LocalDate.now();
-        orders.stream()
-                .filter(o -> "BUY".equals(o.getOrderType()))
-                .filter(o -> "FILLED".equals(o.getStatus()))
-                .filter(o -> "volatility-breakout".equals(o.getStrategyName()))
-                .filter(o -> o.getCreatedAt() != null && o.getCreatedAt().toLocalDate().equals(today))
-                .collect(Collectors.toMap(
-                        com.axiom.strategy.dto.OrderSummaryDto::getTicker,
-                        o -> today,
-                        (a, b) -> a))
-                .forEach(todayBought::putIfAbsent);
+    public void removeTodayBought(String ticker) {
+        todayBought.remove(ticker);
+        stateStore.removeTodayBought(ticker);
+    }
+
+    /** 최근 20거래일(라이브 캔들 제외) 평균 거래량. 데이터 없으면 1.0 반환. */
+    private double avgVolume(List<CandleDto> candles) {
+        int end   = candles.size() - 2; // 라이브 캔들 제외
+        int start = Math.max(0, end - 19);
+        long sum  = 0;
+        int  cnt  = 0;
+        for (int i = start; i <= end; i++) {
+            sum += candles.get(i).getVolume();
+            cnt++;
+        }
+        return cnt == 0 ? 1.0 : (double) sum / cnt;
     }
 
     private SignalDto hold(String ticker, BigDecimal price, String reason) {

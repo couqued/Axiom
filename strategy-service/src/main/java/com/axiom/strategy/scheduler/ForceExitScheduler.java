@@ -7,6 +7,7 @@ import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
+import com.axiom.strategy.notification.SlackNotifier.OvernightExitItem;
 import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -75,7 +77,7 @@ public class ForceExitScheduler {
         }
 
         // 오늘 매수 기록 정리
-        boughtToday.forEach(todayBought::remove);
+        boughtToday.forEach(volatilityBreakoutStrategy::removeTodayBought);
     }
 
     /**
@@ -102,6 +104,7 @@ public class ForceExitScheduler {
 
         if (overnightTickers.isEmpty()) {
             log.info("[ForceExit] 오버나이트 미청산 종목 없음 — 스킵");
+            slackNotifier.sendOvernightExitResult(false, 0, false, List.of());
             return;
         }
 
@@ -121,6 +124,7 @@ public class ForceExitScheduler {
 
         if (confirmedTickers.isEmpty()) {
             log.warn("[ForceExit] 오버나이트 후보 중 volatility-breakout 이력 미확인 — 매도 중단: {}", overnightTickers);
+            slackNotifier.sendOvernightExitResult(false, 0, false, List.of());
             return;
         }
 
@@ -128,6 +132,8 @@ public class ForceExitScheduler {
 
         // ③ 실제 보유 중인 종목만 매도
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
+        List<OvernightExitItem> exitItems = new ArrayList<>();
+        boolean anyFailed = false;
         for (PortfolioItemDto position : positions) {
             if (!confirmedTickers.contains(position.getTicker())) continue;
 
@@ -142,12 +148,15 @@ public class ForceExitScheduler {
             log.info("[ForceExit] 오버나이트 청산 — ticker: {}, qty: {}, success: {}",
                     position.getTicker(), position.getQuantity(), result.success());
 
-            slackNotifier.sendForceExit(
+            exitItems.add(new OvernightExitItem(
                     position.getTicker(), position.getStockName(),
-                    position.getQuantity(), position.getAvgPrice(), result.success());
+                    position.getAvgPrice(), position.getAvgPrice(), result.success()));
+            if (!result.success()) anyFailed = true;
         }
 
+        slackNotifier.sendOvernightExitResult(true, exitItems.size(), anyFailed, exitItems);
+
         // ④ 처리된 항목 todayBought에서 제거
-        confirmedTickers.forEach(todayBought::remove);
+        confirmedTickers.forEach(volatilityBreakoutStrategy::removeTodayBought);
     }
 }

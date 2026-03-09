@@ -8,6 +8,7 @@ import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
+import com.axiom.strategy.persistence.StrategyStateStore;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,16 +42,25 @@ public class TrailingStopService {
     private final OrderClient orderClient;
     private final PortfolioClient portfolioClient;
     private final SlackNotifier slackNotifier;
+    private final StrategyStateStore stateStore;
 
     /** ticker → 고점 가격 (메모리, 재시작 시 portfolio avgPrice로 초기화) */
     private final Map<String, BigDecimal> peakPrices = new ConcurrentHashMap<>();
 
     /**
-     * 서비스 재시작 후 보유 포지션의 avgPrice를 고점 초기값으로 복구.
-     * 다음 전략 실행 시 실제 현재가로 자동 갱신됨.
+     * 서비스 재시작 후 DB에서 peakPrices 복구.
      */
     @PostConstruct
     public void initFromPortfolio() {
+        try {
+            Map<String, BigDecimal> fromDb = stateStore.loadAllPeakPrices();
+            peakPrices.putAll(fromDb);
+            log.info("[TrailingStop] DB에서 peakPrices 복구 — {}개", fromDb.size());
+        } catch (Exception e) {
+            log.warn("[TrailingStop] DB peakPrices 복구 실패: {}", e.getMessage());
+        }
+
+        // DB에 없는 보유 종목은 avgPrice를 초기 고점으로 사용 (폴백)
         try {
             List<PortfolioItemDto> positions = portfolioClient.getPositions();
             for (PortfolioItemDto p : positions) {
@@ -59,16 +69,16 @@ public class TrailingStopService {
                 }
             }
             if (!positions.isEmpty()) {
-                log.info("[TrailingStop] 재시작 복구 — {}개 종목 avgPrice로 초기화", positions.size());
+                log.info("[TrailingStop] avgPrice 폴백 초기화 완료 (DB 누락분 보완)");
             }
         } catch (Exception e) {
-            log.warn("[TrailingStop] 재시작 복구 실패 (다음 전략 실행 시 자동 복구): {}", e.getMessage());
+            log.error("[TrailingStop] avgPrice 폴백 실패 (K8s 기동 순서 문제 가능): {}", e.getMessage());
         }
     }
 
     /**
      * 종목의 현재가를 확인하여 트레일링 스탑 조건을 체크한다.
-     * StrategyEngine에서 매 5분마다 호출.
+     * TrailingStopScheduler에서 매 1분마다 호출.
      *
      * @param ticker       종목 코드
      * @param currentPrice 현재가
@@ -83,12 +93,33 @@ public class TrailingStopService {
         boolean isHolding = positions.stream().anyMatch(p -> p.getTicker().equals(ticker));
         if (!isHolding) {
             peakPrices.remove(ticker); // 보유 해제 시 고점 기록 삭제
+            stateStore.removePeakPrice(ticker);
             return;
         }
 
         // 고점 갱신 (처음이거나 현재가가 더 높으면 갱신)
+        BigDecimal prevPeak = peakPrices.get(ticker);
+
+        // prevPeak이 없으면 (재기동 후 DB 복구 실패 등) avgPrice를 초기 기준점으로 사용
+        if (prevPeak == null) {
+            positions.stream()
+                    .filter(p -> p.getTicker().equals(ticker))
+                    .map(PortfolioItemDto::getAvgPrice)
+                    .filter(avg -> avg != null && avg.compareTo(BigDecimal.ZERO) > 0)
+                    .findFirst()
+                    .ifPresent(avg -> peakPrices.put(ticker, avg));
+            prevPeak = peakPrices.get(ticker);
+        }
+
         BigDecimal peak = peakPrices.merge(ticker, currentPrice, (old, cur) ->
                 cur.compareTo(old) > 0 ? cur : old);
+        if (prevPeak == null || peak.compareTo(prevPeak) != 0) {
+            try {
+                stateStore.savePeakPrice(ticker, peak);
+            } catch (Exception e) {
+                log.error("[TrailingStop] DB peakPrice 저장 실패 — {}: {}", ticker, e.getMessage());
+            }
+        }
 
         // 트레일링 스탑 기준가 = 고점 × (1 - stopPercent / 100)
         double stopPercent = adminConfigStore.getTrailingStopPct();
@@ -103,6 +134,7 @@ public class TrailingStopService {
                     ticker, currentPrice, peak, String.format("%.1f", stopPercent));
             executeSell(ticker, currentPrice, positions, stopPercent);
             peakPrices.remove(ticker);
+            stateStore.removePeakPrice(ticker);
         }
     }
 

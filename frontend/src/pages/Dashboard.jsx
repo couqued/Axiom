@@ -5,6 +5,7 @@ export default function Dashboard() {
   const [portfolio, setPortfolio] = useState([])
   const [balance, setBalance] = useState(null)
   const [prices, setPrices] = useState({})         // { ticker: currentPrice }
+  const [stockNames, setStockNames] = useState({}) // { ticker: stockName } — market-service 기준
   const [tsStatus, setTsStatus] = useState({})     // { ticker: { peakPrice, stopPrice } }
   const [tcStatus, setTcStatus] = useState({})     // { ticker: { buyDate, elapsed, remaining } }
   const [buyInfo, setBuyInfo] = useState({})        // { ticker: { strategyName, marketState } }
@@ -46,11 +47,14 @@ export default function Dashboard() {
           return Promise.all(p.map(item => getStockPrice(item.ticker).catch(() => null)))
             .then(priceResults => {
               const priceMap = {}
+              const nameMap = {}
               p.forEach((item, i) => {
                 const pd = priceResults[i]
                 if (pd?.currentPrice) priceMap[item.ticker] = Number(pd.currentPrice)
+                if (pd?.stockName) nameMap[item.ticker] = pd.stockName
               })
               setPrices(priceMap)
+              setStockNames(nameMap)
             })
         }
       })
@@ -126,7 +130,7 @@ export default function Dashboard() {
             return (
               <div key={item.ticker} className="holding-card">
                 <div className="holding-header">
-                  <span className="holding-name">{item.stockName}</span>
+                  <span className="holding-name">{/^\d+$/.test(item.stockName) ? (stockNames[item.ticker] || item.stockName) : item.stockName}</span>
                   <span className="holding-ticker">{item.ticker}</span>
                 </div>
                 {bi && (
@@ -163,7 +167,7 @@ export default function Dashboard() {
                         {' '}│ {Math.round(remainingAmt).toLocaleString()}원({remainingPct.toFixed(1)}%) 남음
                       </span>
                     )}
-                    <span className="risk-note"> [5분 주기]</span>
+                    <span className="risk-note"> [1분 주기]</span>
                   </div>
                 )}
                 {tc && (

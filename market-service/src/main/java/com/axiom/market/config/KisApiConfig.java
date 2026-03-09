@@ -35,6 +35,14 @@ public class KisApiConfig {
                 .build();
     }
 
+    /** 지수 조회 전용 — mode 와 무관하게 항상 real 서버를 바라본다. */
+    @Bean
+    public WebClient kisRealWebClient() {
+        return WebClient.builder()
+                .baseUrl(real.getBaseUrl())
+                .build();
+    }
+
     @Getter
     @Setter
     public static class ModeConfig {

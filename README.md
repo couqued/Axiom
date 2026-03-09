@@ -556,7 +556,6 @@ PostgreSQL 단일 인스턴스, 스키마 분리 방식.
 | Method | URL | 설명 |
 |--------|-----|------|
 | POST | `/api/strategy/run` | 전략 즉시 실행 (수동 트리거) |
-| POST | `/api/strategy/test-slack` | Slack 알림 연결 테스트 |
 | GET | `/api/strategy/market-state` | 현재 시장 상태 조회 (BULLISH/SIDEWAYS) |
 | POST | `/api/strategy/refresh-market-state` | 시장 상태 수동 갱신 |
 
@@ -842,8 +841,6 @@ curl http://localhost:8080/api/orders
 # 자동매매 전략 수동 실행 (전략 즉시 실행)
 curl -X POST http://localhost:8080/api/strategy/run
 
-# Slack 알림 연결 테스트
-curl -X POST http://localhost:8080/api/strategy/test-slack
 ```
 
 ## 12. 서비스 관리 명령어
@@ -1036,7 +1033,7 @@ kis:
 - [x] 최대 보유 종목 수 제한 (`maxPositions=3`, BUY 3단계 가드 + `boughtThisRun` 카운터)
 - [x] 전량 매도 연동 (portfolio-service 보유 수량 기반 SELL)
 - [x] 관리자 패널 (매매 긴급 정지/재개, 투자 설정 변경, admin-config.json 영구 저장)
-- [x] 전략 관리 탭 (시장 상태 카드, 포지션 현황, 수동 실행, Slack 테스트)
+- [x] 전략 관리 탭 (시장 상태 카드, 포지션 현황, 수동 실행)
 - [x] 서비스 생명주기 Slack 알림 (5개 Spring Boot 서비스 + Vite 프론트엔드 기동/종료)
 - [x] Docker 컨테이너화 (멀티스테이지 빌드 × 6, eclipse-temurin:21 + nginx:alpine)
 - [x] Kubernetes 배포 (Docker Desktop 내장 K8s, StatefulSet/Deployment/PVC/ConfigMap/Secret)
@@ -1067,6 +1064,33 @@ kis:
 ## 16. 변경 이력 (Changelog)
 
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
+
+---
+<details>
+<summary><strong>[v0.5.1] - 2026-03-09</strong> &nbsp;·&nbsp; 테스트 인프라 구축 + 프로덕션 테스트 엔드포인트 제거</summary>
+
+<br>
+
+#### Added
+- **4개 서비스 JUnit 5 단위 테스트 신설** (`src/test/`)
+  - `strategy-service`: `GoldenCrossStrategyTest`, `RsiBollingerStrategyTest`, `VolatilityBreakoutStrategyTest`, `SlackNotifierTest`
+  - `market-service`: `KisMarketApiServiceTest`, `StockSearchServiceTest`
+  - `order-service`: `KisOrderApiServiceTest`, `MarketHoursCheckerTest`
+  - `portfolio-service`: `KisAccountApiServiceTest`
+- **테스트 픽스처 클래스** 신설
+  - `CandleFixture.java` — 골든크로스/데드크로스/RSI-볼린저/변동성돌파 시나리오별 결정론적 캔들 데이터 생성
+  - `MarketMockFixture.java`, `OrderMockFixture.java`, `PortfolioMockFixture.java` — 서비스별 Mock 상수/팩토리
+- **`src/test/resources/application-test.yml`** × 4 — H2 인메모리 DB, `kis.mode: mock`, `slack.enabled: false`
+- **`testImplementation 'spring-boot-starter-test'`** + `useJUnitPlatform()` — 4개 `build.gradle` 공통 추가
+
+#### Removed
+- **`POST /api/strategy/test-slack`** 엔드포인트 제거 — `SlackNotifierTest.java`로 대체 (프로덕션 라우팅 노출 제거)
+
+#### Notes
+- 런타임 Mock 메서드(`getMockPrice()`, `getMockCandles()`, `getMockBalance()`, `placeMockOrder()`)는 `kis.mode=mock` 개발 환경 필수 경로이므로 `src/main`에 유지
+- `StrategyStateStore` 등 JPA 의존 컴포넌트는 `@Mock`으로 처리하여 Spring 컨텍스트 없이 순수 단위 테스트로 실행
+
+</details>
 
 ---
 <details>
@@ -1281,7 +1305,6 @@ kis:
   - **StrategyScheduler**: 평일 09:05 ~ 15:20 사이 5분마다 자동 실행, 15:20 이후 스킵
   - **StrategyEngine**: 설정된 ticker 목록 × 활성 전략을 순회하며 평가 → 신호 발생 시 자동 주문
   - `POST /api/strategy/run` — 수동 즉시 실행 (테스트용)
-  - `POST /api/strategy/test-slack` — Slack 연동 확인용 테스트 메시지 발송
 - **Slack Incoming Webhook 알림** (`SlackNotifier`)
   - 매매 신호 발생 시 BUY/SELL/HOLD 블록 알림
   - 주문 체결 성공/실패 결과 알림

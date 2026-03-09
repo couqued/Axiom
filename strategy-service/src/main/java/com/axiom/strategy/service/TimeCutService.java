@@ -6,9 +6,9 @@ import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
-import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
+import com.axiom.strategy.persistence.StrategyStateStore;
 import com.axiom.strategy.util.TradingCalendar;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -19,13 +19,10 @@ import com.axiom.strategy.admin.TimeCutStatusDto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /**
  * 타임 컷 서비스.
@@ -45,47 +42,22 @@ public class TimeCutService {
     private final OrderClient orderClient;
     private final PortfolioClient portfolioClient;
     private final SlackNotifier slackNotifier;
+    private final StrategyStateStore stateStore;
 
     /** ticker → 매수일 (메모리, 재시작 시 order 이력에서 복구) */
     private final Map<String, LocalDate> buyDates = new ConcurrentHashMap<>();
 
     /**
-     * 서비스 재시작 후 order-service 이력을 조회하여 buyDates 복구.
-     * 현재 보유 중인 종목 중 적용 전략(rsi-bollinger 등)으로 매수된 것만 복구.
+     * 서비스 재시작 후 DB에서 buyDates 복구.
      */
     @PostConstruct
     public void initFromOrders() {
-        StrategyConfig.TimeCutConfig config = strategyConfig.getTimeCut();
-        if (!config.isEnabled()) return;
-
+        if (!strategyConfig.getTimeCut().isEnabled()) return;
         try {
-            List<PortfolioItemDto> positions = portfolioClient.getPositions();
-            if (positions.isEmpty()) return;
-
-            Set<String> heldTickers = positions.stream()
-                    .map(PortfolioItemDto::getTicker)
-                    .collect(Collectors.toSet());
-
-            List<OrderSummaryDto> orders = orderClient.getFilledOrders();
-
-            for (String ticker : heldTickers) {
-                orders.stream()
-                        .filter(o -> ticker.equals(o.getTicker()))
-                        .filter(o -> "BUY".equals(o.getOrderType()))
-                        .filter(o -> "FILLED".equals(o.getStatus()))
-                        .filter(o -> config.getApplicableStrategies().contains(o.getStrategyName()))
-                        .max(Comparator.comparing(OrderSummaryDto::getCreatedAt))
-                        .ifPresent(o -> {
-                            LocalDate buyDate = o.getCreatedAt().toLocalDate();
-                            buyDates.putIfAbsent(ticker, buyDate);
-                            log.info("[TimeCut] 재시작 복구 — ticker: {}, buyDate: {}", ticker, buyDate);
-                        });
-            }
-            if (!buyDates.isEmpty()) {
-                log.info("[TimeCut] 재시작 복구 완료 — {}개 종목", buyDates.size());
-            }
+            buyDates.putAll(stateStore.loadAllBuyDates());
+            log.info("[TimeCut] DB에서 buyDates 복구 — {}개", buyDates.size());
         } catch (Exception e) {
-            log.warn("[TimeCut] 재시작 복구 실패: {}", e.getMessage());
+            log.warn("[TimeCut] DB buyDates 복구 실패: {}", e.getMessage());
         }
     }
 
@@ -101,9 +73,11 @@ public class TimeCutService {
         if (!config.isEnabled()) return;
         if (!config.getApplicableStrategies().contains(strategyName)) return;
 
-        buyDates.put(ticker, LocalDate.now());
+        LocalDate today = LocalDate.now();
+        buyDates.put(ticker, today);
+        stateStore.saveBuyDate(ticker, today);
         log.info("[TimeCut] 매수 기록 — ticker: {}, strategy: {}, date: {}",
-                ticker, strategyName, LocalDate.now());
+                ticker, strategyName, today);
     }
 
     /**
@@ -111,6 +85,7 @@ public class TimeCutService {
      */
     public void clearBuy(String ticker) {
         buyDates.remove(ticker);
+        stateStore.removeBuyDate(ticker);
     }
 
     /**
@@ -132,6 +107,7 @@ public class TimeCutService {
         boolean isHolding = positions.stream().anyMatch(p -> p.getTicker().equals(ticker));
         if (!isHolding) {
             buyDates.remove(ticker);
+            stateStore.removeBuyDate(ticker);
             return;
         }
 
@@ -143,6 +119,7 @@ public class TimeCutService {
                     ticker, buyDate, elapsed, maxDays);
             executeSell(ticker, currentPrice, positions, elapsed, maxDays);
             buyDates.remove(ticker);
+            stateStore.removeBuyDate(ticker);
         }
     }
 

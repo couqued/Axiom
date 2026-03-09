@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getOrders } from '../api/stockApi'
+import { getOrders, getStockPrice } from '../api/stockApi'
 
 const CLOSE_REASON_KO = {
   SIGNAL: '전략 신호',
@@ -23,13 +23,29 @@ function formatDate(dt) {
 
 export default function TradeHistory() {
   const [orders, setOrders] = useState([])
+  const [stockNames, setStockNames] = useState({}) // { ticker: stockName } — 숫자 종목명 보정용
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   const load = () => {
     setLoading(true)
     getOrders()
-      .then(setOrders)
+      .then(data => {
+        setOrders(data)
+        const numericTickers = [...new Set(
+          data.filter(o => /^\d+$/.test(o.stockName)).map(o => o.ticker)
+        )]
+        if (numericTickers.length > 0) {
+          Promise.all(numericTickers.map(t => getStockPrice(t).catch(() => null)))
+            .then(results => {
+              const nameMap = {}
+              numericTickers.forEach((t, i) => {
+                if (results[i]?.stockName) nameMap[t] = results[i].stockName
+              })
+              setStockNames(nameMap)
+            })
+        }
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }
@@ -66,7 +82,7 @@ export default function TradeHistory() {
                   <span className="history-status">{o.status === 'FILLED' ? '●체결' : o.status}</span>
                 </div>
                 <div className="history-stock">
-                  <span className="stock-name">{o.stockName}</span>
+                  <span className="stock-name">{/^\d+$/.test(o.stockName) ? (stockNames[o.ticker] || o.stockName) : o.stockName}</span>
                   <span className="ticker">{o.ticker}</span>
                 </div>
                 <div className="history-amount">

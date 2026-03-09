@@ -15,6 +15,7 @@ import java.time.ZoneId;
 public class StrategyScheduler {
 
     private final StrategyEngine strategyEngine;
+    private final DailySummaryCollector dailySummaryCollector;
 
     /**
      * 평일 09:05 ~ 15:20 사이 5분마다 실행.
@@ -30,6 +31,7 @@ public class StrategyScheduler {
         }
 
         log.info("[Scheduler] 전략 실행 트리거 - {}", now.toLocalTime());
-        strategyEngine.run();
+        StrategyEngine.RunResult result = strategyEngine.run();
+        dailySummaryCollector.record(result);
     }
 }

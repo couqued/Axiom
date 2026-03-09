@@ -19,6 +19,7 @@ public class SignalDto {
     private String strategyName;    // 신호를 생성한 전략명
     private String reason;          // 신호 발생 이유 (예: "MA5(210000) > MA20(205000)")
     private LocalDateTime signalAt;
+    private double score;           // BUY 신호 강도 점수 (0~100, 높을수록 우선 매수). SELL/HOLD = 0
 
     public boolean isTradeSignal() {
         return action == Action.BUY || action == Action.SELL;

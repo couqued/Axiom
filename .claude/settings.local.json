@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(./gradlew bootJar:*)",
+      "Bash(docker build:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl rollout:*)",
+      "Bash(kubectl exec:*)"
+    ]
+  }
+}
