@@ -54,6 +54,9 @@ public class StrategyEngine {
     /** 마지막 전략 실행 BUY 랭킹 (score 내림차순 정렬, 최대 30개) */
     private volatile List<EvalRankEntry> lastBuyRanking = List.of();
     private volatile LocalDateTime lastEvalAt;
+    /** 당일 실행 이력 (5분 주기, 최대 ~74건 — 자정 기준 초기화) */
+    private volatile List<RunRecord> todayRuns = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile LocalDate lastRunDate = null;
 
     @PostConstruct
     public void init() {
@@ -68,6 +71,7 @@ public class StrategyEngine {
 
     public List<EvalRankEntry> getLastBuyRanking() { return lastBuyRanking; }
     public LocalDateTime getLastEvalAt() { return lastEvalAt; }
+    public List<RunRecord> getTodayRuns() { return List.copyOf(todayRuns); }
 
     public int getWatchTickerCount() {
         return watchTickers.size();
@@ -88,6 +92,11 @@ public class StrategyEngine {
     private record BuyCandidate(SignalDto signal, List<CandleDto> allCandles, StockPriceDto priceData) {
         double score() { return signal.getScore(); }
     }
+    public record RunRecord(LocalDateTime runAt, int evaluated, int bought, int sold,
+                            int errors, int skippedMarketWarn, int skippedMaxPositions,
+                            List<TradeRecord> boughtList, List<TradeRecord> soldList,
+                            List<SkipRecord> skippedList) {}
+
     public record EvalRankEntry(
             int rank,
             String ticker,
@@ -216,11 +225,22 @@ public class StrategyEngine {
                 .collect(java.util.stream.Collectors.toList());
         lastEvalAt = LocalDateTime.now();
 
-        log.info("[Engine] 전략 실행 완료 — 평가: {}개, BUY후보: {}개, 매수: {}건, 매도: {}건",
-                tickers.size(), buyQueue.size(), boughtThisRun[0], soldThisRun[0]);
-        return new RunResult(tickers.size(), boughtThisRun[0], soldThisRun[0], false,
+        // 당일 실행 이력 저장 (자정 기준 초기화)
+        RunResult result = new RunResult(tickers.size(), boughtThisRun[0], soldThisRun[0], false,
                 errorsThisRun[0], warnSkipsThisRun[0], maxPosSkipsThisRun[0],
                 List.copyOf(boughtList), List.copyOf(soldList), List.copyOf(skippedList));
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
+        if (!today.equals(lastRunDate)) {
+            todayRuns.clear();
+            lastRunDate = today;
+        }
+        todayRuns.add(new RunRecord(lastEvalAt, result.evaluated(), result.bought(), result.sold(),
+                result.errors(), result.skippedMarketWarn(), result.skippedMaxPositions(),
+                result.boughtList(), result.soldList(), result.skippedList()));
+
+        log.info("[Engine] 전략 실행 완료 — 평가: {}개, BUY후보: {}개, 매수: {}건, 매도: {}건",
+                tickers.size(), buyQueue.size(), boughtThisRun[0], soldThisRun[0]);
+        return result;
     }
 
     /**

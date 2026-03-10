@@ -76,3 +76,6 @@ export const getSkippedSignals = (days = 7) =>
 
 // BUY 랭킹 조회 (마지막 전략 실행 기준)
 export const getEvalRanking = () => request('/api/strategy/eval-ranking')
+
+// 당일 시간별 전략 실행 이력
+export const getRunHistory = () => request('/api/strategy/run-history')

@@ -10,10 +10,14 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import com.axiom.strategy.util.TradingCalendar;
 
 @RestController
 @RequestMapping("/api/strategy")
@@ -59,6 +63,45 @@ public class StrategyController {
         body.put("ma20", snap.ma20());
         body.put("todayOpenIndex", snap.todayOpenIndex());
         body.put("result", "시장 상태 갱신 완료");
+        return ResponseEntity.ok(body);
+    }
+
+    /** 당일 시간별 실행 이력 (메모리, 서버 재시작 시 초기화) */
+    @GetMapping("/run-history")
+    public ResponseEntity<Map<String, Object>> getRunHistory() {
+        List<StrategyEngine.RunRecord> runs = strategyEngine.getTodayRuns();
+
+        Map<Integer, List<StrategyEngine.RunRecord>> byHour = runs.stream()
+                .collect(java.util.stream.Collectors.groupingBy(r -> r.runAt().getHour()));
+
+        List<Map<String, Object>> hours = new ArrayList<>();
+        for (int h = 9; h <= 15; h++) {
+            List<StrategyEngine.RunRecord> hrRuns = byHour.getOrDefault(h, List.of());
+            if (hrRuns.isEmpty()) continue;
+
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("hour", h);
+            entry.put("runCount", hrRuns.size());
+            entry.put("evaluated", hrRuns.stream().mapToInt(StrategyEngine.RunRecord::evaluated).sum());
+            entry.put("bought", hrRuns.stream().mapToInt(StrategyEngine.RunRecord::bought).sum());
+            entry.put("sold", hrRuns.stream().mapToInt(StrategyEngine.RunRecord::sold).sum());
+            entry.put("errors", hrRuns.stream().mapToInt(StrategyEngine.RunRecord::errors).sum());
+            entry.put("boughtTickers", hrRuns.stream()
+                    .flatMap(r -> r.boughtList().stream())
+                    .map(t -> t.stockName() + "(" + t.ticker() + ")")
+                    .distinct().collect(java.util.stream.Collectors.toList()));
+            entry.put("skippedList", hrRuns.stream()
+                    .flatMap(r -> r.skippedList().stream())
+                    .map(s -> Map.of("ticker", s.ticker(), "stockName", s.stockName(), "reason", s.reason()))
+                    .distinct().collect(java.util.stream.Collectors.toList()));
+            entry.put("noSignalCount",
+                    hrRuns.stream().filter(r -> r.bought() == 0 && r.skippedList().isEmpty()).count());
+            hours.add(entry);
+        }
+
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("date", LocalDate.now(TradingCalendar.KST).toString());
+        body.put("hours", hours);
         return ResponseEntity.ok(body);
     }
 

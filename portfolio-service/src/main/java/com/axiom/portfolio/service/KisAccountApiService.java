@@ -125,11 +125,24 @@ public class KisAccountApiService {
         Map<String, String> summary = output2.get(0);
 
         Map<String, Object> result = new HashMap<>();
+        BigDecimal profitLoss     = parseBigDecimal(summary.get("evlu_pfls_smtl_amt"));
+        BigDecimal profitLossRate = parseBigDecimal(summary.get("evlu_erng_rt"));
+        BigDecimal purchaseAmt    = parseBigDecimal(summary.get("pchs_amt_smtl_amt"));
+
+        // evlu_erng_rt가 0이고 매입금액이 존재할 때 직접 계산
+        if (profitLossRate.compareTo(BigDecimal.ZERO) == 0
+                && purchaseAmt.compareTo(BigDecimal.ZERO) != 0) {
+            profitLossRate = profitLoss
+                    .divide(purchaseAmt, 4, java.math.RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("100"))
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+        }
+
         result.put("totalBalance",   parseBigDecimal(summary.get("tot_evlu_amt")));
         result.put("cashBalance",    parseBigDecimal(summary.get("dnca_tot_amt")));
         result.put("stockBalance",   parseBigDecimal(summary.get("scts_evlu_amt")));
-        result.put("profitLoss",     parseBigDecimal(summary.get("evlu_pfls_smtl_amt")));
-        result.put("profitLossRate", parseBigDecimal(summary.get("evlu_erng_rt")));
+        result.put("profitLoss",     profitLoss);
+        result.put("profitLossRate", profitLossRate);
         result.put("mock", false);
         log.info("[KIS-{}] 잔고 조회 완료 - 총평가: {}", kisApiConfig.getMode().toUpperCase(), result.get("totalBalance"));
         return result;

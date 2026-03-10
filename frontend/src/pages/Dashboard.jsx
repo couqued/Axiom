@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getPortfolio, getBalance, getStockPrice, getTrailingStopStatus, getTimeCutStatus, getOrders } from '../api/stockApi'
 
+const isMarketOpen = () => {
+  const now = new Date()
+  const day = now.getDay() // 0=일, 6=토
+  if (day === 0 || day === 6) return false
+  const hour = now.getHours()
+  const min = now.getMinutes()
+  const totalMin = hour * 60 + min
+  return totalMin >= 9 * 60 && totalMin < 15 * 60 + 30 // 09:00~15:30
+}
+
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState([])
   const [balance, setBalance] = useState(null)
@@ -66,6 +76,7 @@ export default function Dashboard() {
 
   const refreshDynamicData = useCallback(async () => {
     if (portfolio.length === 0) return
+    if (!isMarketOpen()) return
     try {
       const [ts, tc, ...priceResults] = await Promise.all([
         getTrailingStopStatus().catch(() => ({})),
@@ -78,7 +89,7 @@ export default function Dashboard() {
       const newNames = {}
       portfolio.forEach((item, i) => {
         if (priceResults[i]) {
-          newPrices[item.ticker] = priceResults[i].currentPrice
+          newPrices[item.ticker] = Number(priceResults[i].currentPrice)
           if (priceResults[i].stockName) newNames[item.ticker] = priceResults[i].stockName
         }
       })
@@ -122,7 +133,7 @@ export default function Dashboard() {
             <span>손익</span>
             <span className={balance.profitLoss >= 0 ? 'up' : 'down'}>
               {balance.profitLoss >= 0 ? '+' : ''}{Number(balance.profitLoss).toLocaleString()}원
-              ({balance.profitLossRate}%)
+              ({Number(balance.profitLossRate)}%)
             </span>
           </div>
           {balance.mock && <p className="mock-badge">MOCK 데이터</p>}
@@ -190,6 +201,11 @@ export default function Dashboard() {
                   <span className="holding-meta">
                     {qty}주 · 평균 {avgPrice.toLocaleString()}원
                     {currentPrice != null && ` · 현재 ${currentPrice.toLocaleString()}원`}
+                    {ts?.peakPrice != null && (
+                      <span style={{ color: '#7dccff', marginLeft: 4 }}>
+                        · 고점 {Number(ts.peakPrice).toLocaleString()}원
+                      </span>
+                    )}
                   </span>
                 </div>
                 {pnl != null && (

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { getMarketState, refreshMarketState, runStrategy, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice } from '../api/stockApi'
+import { useState, useEffect, useCallback } from 'react'
+import { getMarketState, refreshMarketState, runStrategy, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getRunHistory } from '../api/stockApi'
 
 const STRATEGY_KO = {
   'golden-cross': '골든크로스',
@@ -40,6 +40,7 @@ export default function Strategy({ liveAdminConfig }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  const [runHistory, setRunHistory] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [running, setRunning] = useState(false)
   const [runMsg, setRunMsg] = useState(null)
@@ -50,6 +51,11 @@ export default function Strategy({ liveAdminConfig }) {
       setRankingEvalAt(data.evaluatedAt || null)
     }).catch(() => {})
 
+  const loadRunHistory = useCallback(async () => {
+    const data = await getRunHistory().catch(() => null)
+    if (data) setRunHistory(data)
+  }, [])
+
   useEffect(() => {
     setLoading(true)
     Promise.all([
@@ -59,8 +65,9 @@ export default function Strategy({ liveAdminConfig }) {
       getTrailingStopStatus().catch(() => ({})),
       getTimeCutStatus().catch(() => ({})),
       getEvalRanking().catch(() => ({ items: [], evaluatedAt: null })),
+      getRunHistory().catch(() => null),
     ])
-      .then(([ms, p, cfg, ts, tc, rank]) => {
+      .then(([ms, p, cfg, ts, tc, rank, history]) => {
         setMarketState(ms.state)
         setIndexSnap({ yesterdayClose: ms.yesterdayClose, ma20: ms.ma20, todayOpenIndex: ms.todayOpenIndex })
         setPositions(p)
@@ -69,6 +76,7 @@ export default function Strategy({ liveAdminConfig }) {
         setTcStatus(tc)
         setRanking(rank.items || [])
         setRankingEvalAt(rank.evaluatedAt || null)
+        if (history) setRunHistory(history)
         if (p.length > 0) {
           Promise.all(p.map(item => getStockPrice(item.ticker).catch(() => null)))
             .then(results => {
@@ -132,6 +140,7 @@ export default function Strategy({ liveAdminConfig }) {
       setTsStatus(ts)
       setTcStatus(tc)
       await loadRanking()
+      await loadRunHistory()
       if (p.length > 0) {
         Promise.all(p.map(item => getStockPrice(item.ticker).catch(() => null)))
           .then(results => {
@@ -273,6 +282,42 @@ export default function Strategy({ liveAdminConfig }) {
           <p className={`result-msg ${runMsg.ok ? 'success' : 'fail'}`}>{runMsg.text}</p>
         )}
       </div>
+
+      {/* 시간별 실행 이력 */}
+      {runHistory?.hours?.length > 0 && (
+        <div className="run-history-card">
+          <h3>시간별 실행 이력 <span className="section-sub">당일 · 서버 재시작 시 초기화</span></h3>
+          <table className="run-history-table">
+            <thead>
+              <tr><th>시간대</th><th>실행</th><th>평가</th><th>매수</th><th>매도</th><th>주요 내용</th></tr>
+            </thead>
+            <tbody>
+              {runHistory.hours.map(h => (
+                <tr key={h.hour}>
+                  <td>{String(h.hour).padStart(2, '0')}:xx</td>
+                  <td>{h.runCount}회</td>
+                  <td>{h.evaluated}개</td>
+                  <td className={h.bought > 0 ? 'up' : ''}>{h.bought}건</td>
+                  <td className={h.sold > 0 ? 'down' : ''}>{h.sold}건</td>
+                  <td className="run-history-detail">
+                    {h.boughtTickers?.length > 0 && (
+                      <span className="up">{h.boughtTickers.join(', ')}</span>
+                    )}
+                    {h.skippedList?.length > 0 && (
+                      <span className="skip-hint">
+                        {h.skippedList.map(s => s.stockName).join(', ')} 스킵
+                      </span>
+                    )}
+                    {h.noSignalCount === h.runCount && h.bought === 0 && (
+                      <span className="empty-hint">BUY 신호 없음</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* BUY 신호 랭킹 */}
       <div className="skipped-card">
