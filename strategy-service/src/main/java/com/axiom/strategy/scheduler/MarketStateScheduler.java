@@ -4,12 +4,14 @@ import com.axiom.strategy.client.MarketClient;
 import com.axiom.strategy.engine.StrategyEngine;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.service.MarketStateService;
+import com.axiom.strategy.util.TradingCalendar;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -48,6 +50,11 @@ public class MarketStateScheduler {
 
     @Scheduled(cron = "0 30 8 * * MON-FRI", zone = "Asia/Seoul")
     public void refreshMorningRoutine() {
+        if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
+            log.info("[MarketStateScheduler] 공휴일 — 스킵");
+            return;
+        }
+
         // ① 감시 종목 갱신
         List<String> tickers = marketClient.getScreenedTickers();
         if (!tickers.isEmpty()) {

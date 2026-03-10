@@ -1,6 +1,7 @@
 package com.axiom.strategy.admin;
 
 import com.axiom.strategy.config.StrategyConfig;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -73,12 +74,12 @@ public class AdminConfigStore {
         File file = new File(configFilePath);
         if (!file.exists()) return;
         try {
-            Snapshot snapshot = objectMapper.readValue(file, Snapshot.class);
-            this.paused          = snapshot.paused();
-            this.investAmountKrw = snapshot.investAmountKrw();
-            this.maxPositions    = snapshot.maxPositions();
-            this.trailingStopPct = snapshot.trailingStopPct();
-            this.timeCutDays     = snapshot.timeCutDays();
+            JsonNode node = objectMapper.readTree(file);
+            if (node.has("paused"))          this.paused          = node.get("paused").asBoolean(this.paused);
+            if (node.has("investAmountKrw")) this.investAmountKrw = node.get("investAmountKrw").asInt(this.investAmountKrw);
+            if (node.has("maxPositions"))    this.maxPositions    = node.get("maxPositions").asInt(this.maxPositions);
+            if (node.has("trailingStopPct")) this.trailingStopPct = node.get("trailingStopPct").asDouble(this.trailingStopPct);
+            if (node.has("timeCutDays"))     this.timeCutDays     = node.get("timeCutDays").asInt(this.timeCutDays);
             log.info("[AdminConfig] 설정 로드 — paused={}, investAmountKrw={}, maxPositions={}, trailingStopPct={}, timeCutDays={}",
                     paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays);
         } catch (IOException e) {

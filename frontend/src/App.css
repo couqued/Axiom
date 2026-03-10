@@ -672,6 +672,7 @@ body {
 
 .risk-remain { color: #4fa3ff; }
 .risk-note { color: #555; font-size: 11px; }
+.refresh-time { font-size: 11px; color: #888; margin-left: 8px; font-weight: 400; }
 
 .holding-empty {
   background: #1a1d27;

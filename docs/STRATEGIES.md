@@ -377,12 +377,13 @@ RSI+볼린저 전략으로 BUY 발생 시:
 
 ### 거래일 계산 (TradingCalendar)
 
-주말(토/일)을 제외한 실제 거래일 수를 계산합니다. 공휴일은 별도 처리하지 않습니다 (KIS API에서 공휴일 주문 불가 오류 반환으로 대응).
+주말(토/일) 및 `application.yml`의 `trading.holidays`에 등록된 공휴일을 제외한 실제 거래일 수를 계산합니다.
+`KrxHolidayInitializer`가 앱 시작 시 YAML 목록을 `TradingCalendar.HOLIDAYS`에 주입하므로 별도 코드 변경 없이 반영됩니다.
 
 ```java
-// 예시: 월요일 매수 → 수요일(2거래일 후)까지 유지, 목요일(3거래일 후) 강제 청산
-tradingDaysBetween(Monday, Wednesday) = 2   // 아직 유지
-tradingDaysBetween(Monday, Thursday)  = 3   // 강제 청산!
+// 예시: 월요일 매수, 수요일이 공휴일인 경우
+tradingDaysBetween(Monday, Thursday)  = 2   // 수요일 제외 → 아직 유지
+tradingDaysBetween(Monday, Friday)    = 3   // 강제 청산!
 ```
 
 ### 재시작 복구
@@ -422,6 +423,9 @@ GET /api/strategy/admin/time-cut-status
 | `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) | — |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작
+>
+> `TradingCalendar.isTradingDay()`를 이용한 **공휴일 guard**가 5개 메서드 모두에 적용됩니다. 공휴일에는 "공휴일 — 스킵" 로그 후 즉시 return합니다.
+> `runStrategies()`, `checkTrailingStop()`, `exitOvernightPositions()` 3개는 추가로 **수능일 늦은 개장 guard**가 적용되어 10시 이전 실행을 스킵합니다.
 
 ### Slack 알림 상세
 
@@ -543,9 +547,19 @@ strategy:
     applicable-strategies:
       - rsi-bollinger       # 타임 컷 적용 전략 (변동성 돌파는 ForceExit으로 별도 관리)
 
+trading:
+  holidays:                # KRX 공휴일 목록 — 매년 초 KRX 공고 후 업데이트
+    - "2026-01-01"         # 신정
+    - "2026-02-17"         # 설날 (연휴 포함 전후 날짜도 추가)
+    # ... 나머지 공휴일
+  late-open-days:          # 10:00 늦은 개장일 (수능 등)
+    - "2026-11-19"         # 대학수학능력시험
+
 portfolio-service:
   url: http://localhost:8083
 ```
+
+> 공휴일 목록은 연 1회 KRX 공식 휴장일 공고 확인 후 수동 업데이트. 변경 후 strategy-service 재배포 필요.
 
 > `watch-tickers`는 서비스 재시작 직후 또는 `market-service` 응답 실패 시 사용하는 **fallback 목록**입니다.
 > 정상 운영 시 매일 08:30에 `market-service /internal/screened-tickers`로 **코스피200+코스닥150** 전체로 자동 교체됩니다.

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import com.axiom.strategy.util.TradingCalendar;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -59,7 +60,7 @@ public class MarketStateService {
      * StrategyEngine.run() 시작 시 호출 — 당일 최초 1회만 저장 (9:05 AM 스냅샷).
      */
     public void captureTodayOpenIndex(BigDecimal price) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
         if (todayOpenDate == null || !todayOpenDate.equals(today)) {
             todayOpenIndex = price;
             todayOpenDate  = today;

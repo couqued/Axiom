@@ -24,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import com.axiom.strategy.util.TradingCalendar;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -253,7 +254,7 @@ public class StrategyEngine {
 
         // 오늘 라이브 캔들 생성
         CandleDto liveCandle = CandleDto.builder()
-                .tradeDate(LocalDate.now())
+                .tradeDate(LocalDate.now(TradingCalendar.KST))
                 .openPrice(priceData.getOpenPrice())
                 .highPrice(priceData.getHighPrice())
                 .lowPrice(priceData.getLowPrice())

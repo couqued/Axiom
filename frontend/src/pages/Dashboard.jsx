@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { getPortfolio, getBalance, getStockPrice, getTrailingStopStatus, getTimeCutStatus, getOrders } from '../api/stockApi'
 
 export default function Dashboard() {
@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [buyInfo, setBuyInfo] = useState({})        // { ticker: { strategyName, marketState } }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [lastRefreshed, setLastRefreshed] = useState(null)
 
   const STRATEGY_LABEL = {
     'volatility-breakout': '변동성 돌파',
@@ -58,9 +59,42 @@ export default function Dashboard() {
             })
         }
       })
+      .then(() => setLastRefreshed(new Date()))
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  const refreshDynamicData = useCallback(async () => {
+    if (portfolio.length === 0) return
+    try {
+      const [ts, tc, ...priceResults] = await Promise.all([
+        getTrailingStopStatus().catch(() => ({})),
+        getTimeCutStatus().catch(() => ({})),
+        ...portfolio.map(item => getStockPrice(item.ticker).catch(() => null)),
+      ])
+      setTsStatus(ts)
+      setTcStatus(tc)
+      const newPrices = {}
+      const newNames = {}
+      portfolio.forEach((item, i) => {
+        if (priceResults[i]) {
+          newPrices[item.ticker] = priceResults[i].currentPrice
+          if (priceResults[i].stockName) newNames[item.ticker] = priceResults[i].stockName
+        }
+      })
+      setPrices(prev => ({ ...prev, ...newPrices }))
+      setStockNames(prev => ({ ...prev, ...newNames }))
+      setLastRefreshed(new Date())
+    } catch (e) {
+      // 폴링 실패는 무시 (이전 값 유지)
+    }
+  }, [portfolio])
+
+  useEffect(() => {
+    if (portfolio.length === 0) return
+    const interval = setInterval(refreshDynamicData, 60 * 1000)
+    return () => clearInterval(interval)
+  }, [portfolio, refreshDynamicData])
 
   if (loading) return <div className="loading">로딩 중...</div>
   if (error) return <div className="error">오류: {error}</div>
@@ -96,7 +130,14 @@ export default function Dashboard() {
       )}
 
       {/* 보유 종목 */}
-      <h3>보유 종목</h3>
+      <h3>
+        보유 종목
+        {lastRefreshed && (
+          <span className="refresh-time">
+            {lastRefreshed.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} 갱신
+          </span>
+        )}
+      </h3>
       {portfolio.length === 0 ? (
         <div className="holding-empty">
           <div className="holding-empty-header">

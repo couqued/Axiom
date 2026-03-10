@@ -73,7 +73,7 @@ public class TimeCutService {
         if (!config.isEnabled()) return;
         if (!config.getApplicableStrategies().contains(strategyName)) return;
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
         buyDates.put(ticker, today);
         stateStore.saveBuyDate(ticker, today);
         log.info("[TimeCut] 매수 기록 — ticker: {}, strategy: {}, date: {}",
@@ -111,7 +111,7 @@ public class TimeCutService {
             return;
         }
 
-        int elapsed = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now());
+        int elapsed = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now(TradingCalendar.KST));
         int maxDays  = adminConfigStore.getTimeCutDays();
 
         if (elapsed >= maxDays) {
@@ -127,7 +127,7 @@ public class TimeCutService {
         int maxDays = adminConfigStore.getTimeCutDays();
         Map<String, TimeCutStatusDto> result = new HashMap<>();
         buyDates.forEach((ticker, buyDate) -> {
-            int elapsed   = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now());
+            int elapsed   = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now(TradingCalendar.KST));
             int remaining = Math.max(0, maxDays - elapsed);
             result.put(ticker, new TimeCutStatusDto(buyDate, elapsed, remaining));
         });

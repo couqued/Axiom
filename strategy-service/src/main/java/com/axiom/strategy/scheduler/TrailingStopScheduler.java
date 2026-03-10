@@ -6,11 +6,13 @@ import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.StockPriceDto;
 import com.axiom.strategy.service.TrailingStopService;
+import com.axiom.strategy.util.TradingCalendar;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.List;
@@ -31,7 +33,18 @@ public class TrailingStopScheduler {
      */
     @Scheduled(cron = "0 * 9-15 * * MON-FRI", zone = "Asia/Seoul")
     public void checkTrailingStop() {
+        if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
+            log.info("[TrailingStopScheduler] 공휴일 — 스킵");
+            return;
+        }
+
         ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Seoul"));
+
+        if (TradingCalendar.isLateOpenDay(LocalDate.now(TradingCalendar.KST)) && now.getHour() < 10) {
+            log.info("[TrailingStopScheduler] 수능일 늦은 개장 — 10시 이전 스킵");
+            return;
+        }
+
         if (now.getHour() == 15 && now.getMinute() > 20) return;
 
         if (adminConfigStore.isPaused()) return;

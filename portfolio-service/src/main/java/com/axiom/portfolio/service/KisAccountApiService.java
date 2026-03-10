@@ -3,8 +3,10 @@ package com.axiom.portfolio.service;
 import com.axiom.portfolio.config.KisApiConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -24,7 +26,20 @@ public class KisAccountApiService {
         if (kisApiConfig.isMock()) {
             return getMockBalance();
         }
-        return getKisBalance();
+        try {
+            return getKisBalance();
+        } catch (Exception e) {
+            log.error("[KIS-{}] 잔고 조회 실패 — fallback 반환: {}", kisApiConfig.getMode().toUpperCase(), e.getMessage());
+            Map<String, Object> fallback = new HashMap<>();
+            fallback.put("totalBalance",   java.math.BigDecimal.ZERO);
+            fallback.put("cashBalance",    java.math.BigDecimal.ZERO);
+            fallback.put("stockBalance",   java.math.BigDecimal.ZERO);
+            fallback.put("profitLoss",     java.math.BigDecimal.ZERO);
+            fallback.put("profitLossRate", java.math.BigDecimal.ZERO);
+            fallback.put("mock", false);
+            fallback.put("error", e.getMessage());
+            return fallback;
+        }
     }
 
     // ── Mock ────────────────────────────────────────────────────────────────
@@ -72,10 +87,41 @@ public class KisAccountApiService {
                 .header("appsecret", active.getAppSecret())
                 .header("tr_id",     trId)
                 .retrieve()
+                .onStatus(HttpStatusCode::isError, clientResponse ->
+                        clientResponse.bodyToMono(String.class)
+                                .flatMap(body -> {
+                                    log.error("[KIS-{}] HTTP {} 오류 응답: {}", kisApiConfig.getMode().toUpperCase(),
+                                            clientResponse.statusCode().value(), body);
+                                    return Mono.error(new RuntimeException(
+                                            "KIS API HTTP " + clientResponse.statusCode().value() + ": " + body));
+                                }))
                 .bodyToMono(Map.class)
                 .block();
 
+        if (response == null) {
+            throw new RuntimeException("KIS 잔고 조회 실패: 응답 없음");
+        }
+
+        // KIS API 오류 코드 체크
+        String rtCd = (String) response.get("rt_cd");
+        if (!"0".equals(rtCd)) {
+            String msg = (String) response.getOrDefault("msg1", "알 수 없는 오류");
+            log.error("[KIS-{}] 잔고 조회 오류 - rt_cd: {}, msg: {}", kisApiConfig.getMode().toUpperCase(), rtCd, msg);
+            throw new RuntimeException("KIS 잔고 조회 실패: " + msg);
+        }
+
         List<Map<String, String>> output2 = (List<Map<String, String>>) response.get("output2");
+        if (output2 == null || output2.isEmpty()) {
+            log.warn("[KIS-{}] output2 없음 — 빈 잔고 반환", kisApiConfig.getMode().toUpperCase());
+            Map<String, Object> empty = new HashMap<>();
+            empty.put("totalBalance",   BigDecimal.ZERO);
+            empty.put("cashBalance",    BigDecimal.ZERO);
+            empty.put("stockBalance",   BigDecimal.ZERO);
+            empty.put("profitLoss",     BigDecimal.ZERO);
+            empty.put("profitLossRate", BigDecimal.ZERO);
+            empty.put("mock", false);
+            return empty;
+        }
         Map<String, String> summary = output2.get(0);
 
         Map<String, Object> result = new HashMap<>();

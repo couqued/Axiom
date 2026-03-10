@@ -3,6 +3,7 @@ package com.axiom.strategy.strategy;
 import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.persistence.StrategyStateStore;
+import com.axiom.strategy.util.TradingCalendar;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -115,7 +116,7 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
      * StrategyEngine에서 호출.
      */
     public void markBought(String ticker) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
         todayBought.put(ticker, today);
         stateStore.saveTodayBought(ticker, today);
     }

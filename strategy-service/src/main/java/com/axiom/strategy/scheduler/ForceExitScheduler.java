@@ -14,7 +14,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.axiom.strategy.util.TradingCalendar;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -39,8 +42,13 @@ public class ForceExitScheduler {
 
     @Scheduled(cron = "0 20 15 * * MON-FRI", zone = "Asia/Seoul")
     public void forceExit() {
+        if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
+            log.info("[ForceExit] 공휴일 — 스킵");
+            return;
+        }
+
         Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought();
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
 
         // 오늘 변동성 돌파로 매수한 종목
         Set<String> boughtToday = todayBought.entrySet().stream()
@@ -93,8 +101,19 @@ public class ForceExitScheduler {
      */
     @Scheduled(cron = "0 5 9 * * MON-FRI", zone = "Asia/Seoul")
     public void exitOvernightPositions() {
+        if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
+            log.info("[ForceExit] 공휴일 — 스킵");
+            return;
+        }
+
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Seoul"));
+        if (TradingCalendar.isLateOpenDay(LocalDate.now(TradingCalendar.KST)) && now.getHour() < 10) {
+            log.info("[ForceExit] 수능일 늦은 개장 — 10시 이전 스킵");
+            return;
+        }
+
         Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought();
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
 
         // ① 전 거래일 매수 후 미청산 후보 추출
         Set<String> overnightTickers = todayBought.entrySet().stream()

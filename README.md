@@ -1041,6 +1041,7 @@ kis:
 - [x] Pod Event Watcher (pod-watcher — K8s Watch API로 전체 9개 Pod 상태 Slack 알림)
 - [x] Frontend nginx 프록시 (K8s: /api/ → api-gateway, Dev: Vite proxy)
 - [x] AdminConfigStore 경로 외부화 (`ADMIN_CONFIG_PATH` env var + PVC 마운트)
+- [x] 공휴일 거래일 체크 (YAML 공휴일 목록 + 스케줄러 5개 holiday guard + 수능일 늦은 개장 guard)
 
 ### 진행 예정
 - [ ] KIS API 실제 연동 (실계좌 API 키 발급 후)
@@ -1064,6 +1065,39 @@ kis:
 ## 16. 변경 이력 (Changelog)
 
 > 최신 버전이 맨 위에 표시됩니다. 제목 왼쪽 ▶ 를 클릭하면 상세 내용이 펼쳐집니다.
+
+---
+<details>
+<summary><strong>[v0.5.2] - 2026-03-10</strong> &nbsp;·&nbsp; 공휴일 거래일 체크 (YAML 공휴일 목록 + 스케줄러 holiday guard)</summary>
+
+<br>
+
+#### Added
+- **`trading.holidays` / `trading.late-open-days`** (`application.yml`) — 2026년 KRX 공휴일 16일 + 수능일 1일 하드코딩 관리
+- **`KrxHolidayInitializer.java`** (`com.axiom.strategy.config`) — `@PostConstruct`로 YAML 목록을 `TradingCalendar`에 주입
+- **`TradingCalendar` 공휴일 지원**
+  - `private static Set<LocalDate> HOLIDAYS` / `LATE_OPEN_DAYS` — static Set 추가
+  - `setHolidays()` / `setLateOpenDays()` — 외부 주입 메서드
+  - `isTradingDay()` — 주말 외 공휴일도 제외
+  - `isLateOpenDay()` — 수능 등 10:00 늦은 개장일 판별
+- **스케줄러 5개 holiday guard** — 공휴일에 "공휴일 — 스킵" 로그 후 즉시 return
+  - `MarketStateScheduler.refreshMorningRoutine()` (08:30)
+  - `ForceExitScheduler.forceExit()` (15:20)
+  - `ForceExitScheduler.exitOvernightPositions()` (09:05)
+  - `StrategyScheduler.runStrategies()` (09:05~15:20)
+  - `TrailingStopScheduler.checkTrailingStop()` (09:00~15:20)
+- **수능일 늦은 개장 guard** — `exitOvernightPositions`, `runStrategies`, `checkTrailingStop` 3개에서 10시 이전 스킵
+
+#### Changed
+- `TradingCalendar.isTradingDay()`: 주말만 → 주말 + 공휴일 제외
+- `tradingDaysBetween()`: `isTradingDay()` 내부 호출이므로 **공휴일 자동 제외** (TimeCutService 경과일 계산에 자동 반영)
+
+#### Notes
+- 공휴일 목록은 `strategy-service/src/main/resources/application.yml`의 `trading.holidays`에서 연 1회 수동 업데이트
+- 추석·부처님오신날 등 음력 기반 공휴일은 KRX 공식 휴장일 공고(한국거래소 → 공지사항)에서 매년 초 확인 필요
+- 빌드: `docker build -t axiom/strategy-service:latest -f Dockerfile.strategy-service .` + `kubectl rollout restart deployment/strategy-service -n axiom`
+
+</details>
 
 ---
 <details>
