@@ -1,14 +1,15 @@
 package com.axiom.market.scheduler;
 
-import com.axiom.market.config.CandleConfig;
 import com.axiom.market.config.KisApiConfig;
 import com.axiom.market.service.CandleService;
+import com.axiom.market.service.StockScreenerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -16,7 +17,7 @@ import java.time.LocalDate;
 public class CandleCollectScheduler {
 
     private final CandleService candleService;
-    private final CandleConfig candleConfig;
+    private final StockScreenerService stockScreenerService;
     private final KisApiConfig kisApiConfig;
 
     /**
@@ -31,10 +32,10 @@ public class CandleCollectScheduler {
         }
 
         LocalDate today = LocalDate.now();
-        log.info("[Scheduler] 일봉 수집 시작 - date: {}, tickers: {}",
-                today, candleConfig.getWatchTickers());
+        List<String> tickers = stockScreenerService.getScreenedTickers();
+        log.info("[Scheduler] 일봉 수집 시작 - date: {}, tickers: {}개", today, tickers.size());
 
-        for (String ticker : candleConfig.getWatchTickers()) {
+        for (String ticker : tickers) {
             try {
                 candleService.collectCandle(ticker, today);
             } catch (Exception e) {

@@ -33,12 +33,6 @@ kis:
     account-no: ${KIS_REAL_ACCOUNT_NO:PLACEHOLDER}
 
 candle:
-  watch-tickers:   # 일봉 자동 수집 대상 종목 (스케줄러가 매일 15:40 수집)
-    - "005930"     # 삼성전자
-    - "000660"     # SK하이닉스
-    - "035420"     # NAVER
-    - "051910"     # LG화학
-    - "006400"     # 삼성SDI
   default-days: 60 # 기본 조회 일수
 
 slack:

@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * stock-universe.json 역직렬화 DTO.
@@ -15,4 +16,5 @@ public class StockUniverse {
     private String lastUpdated;
     private List<String> kospi200;
     private List<String> kosdaq150;
+    private Map<String, String> tickerNames;
 }

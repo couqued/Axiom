@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 코스피200 + 코스닥150 종목 유니버스를 로드하고 캐싱한다.
@@ -25,6 +26,7 @@ public class StockScreenerService {
     private final ObjectMapper objectMapper;
 
     private volatile List<String> cachedTickers = List.of();
+    private volatile Map<String, String> cachedTickerNames = Map.of();
 
     @PostConstruct
     public void init() {
@@ -46,6 +48,9 @@ public class StockScreenerService {
             if (universe.getKosdaq150() != null) all.addAll(universe.getKosdaq150());
 
             this.cachedTickers = Collections.unmodifiableList(all);
+            this.cachedTickerNames = universe.getTickerNames() != null
+                    ? Collections.unmodifiableMap(universe.getTickerNames())
+                    : Map.of();
 
             log.info("[Screener] 유니버스 로드 완료 — 코스피200({}개) + 코스닥150({}개) = 총 {}개 (lastUpdated: {})",
                     universe.getKospi200() != null ? universe.getKospi200().size() : 0,
@@ -59,5 +64,13 @@ public class StockScreenerService {
 
     public List<String> getScreenedTickers() {
         return cachedTickers;
+    }
+
+    public Map<String, String> getTickerNames() {
+        return cachedTickerNames;
+    }
+
+    public String getTickerName(String ticker) {
+        return cachedTickerNames.getOrDefault(ticker, ticker);
     }
 }
