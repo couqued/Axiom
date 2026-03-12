@@ -26,11 +26,13 @@ export const buyStock = (body) =>
 export const sellStock = (body) =>
   request('/api/orders/sell', { method: 'POST', body: JSON.stringify({ ...body, orderType: 'SELL' }) })
 
-// 주문 내역
-export const getOrders = () => request('/api/orders')
+// 주문 내역 (mode: "paper"|"real"|null)
+export const getOrders = (mode) =>
+  request(mode ? `/api/orders?mode=${mode}` : '/api/orders')
 
-// 포트폴리오
-export const getPortfolio = () => request('/api/portfolio')
+// 포트폴리오 (mode: "paper"|"real"|null → null이면 서버 활성 모드 기준)
+export const getPortfolio = (mode) =>
+  request(mode ? `/api/portfolio?mode=${mode}` : '/api/portfolio')
 
 // 계좌 잔고
 export const getBalance = () => request('/api/portfolio/balance')
@@ -50,15 +52,21 @@ export const runStrategy = () =>
 export const getAdminStatus = () =>
   request('/api/strategy/admin/status')
 
-// 관리자 — 매매 중단
-export const pauseTrading = () =>
-  request('/api/strategy/admin/pause', { method: 'POST' })
+// 관리자 — 매매 중단 (targetMode: "paper"|"real"|null)
+export const pauseTrading = (targetMode) =>
+  request(targetMode
+    ? `/api/strategy/admin/pause?targetMode=${targetMode}`
+    : '/api/strategy/admin/pause',
+    { method: 'POST' })
 
-// 관리자 — 매매 재개
-export const resumeTrading = () =>
-  request('/api/strategy/admin/resume', { method: 'POST' })
+// 관리자 — 매매 재개 (targetMode: "paper"|"real"|null)
+export const resumeTrading = (targetMode) =>
+  request(targetMode
+    ? `/api/strategy/admin/resume?targetMode=${targetMode}`
+    : '/api/strategy/admin/resume',
+    { method: 'POST' })
 
-// 관리자 — 투자 설정 변경
+// 관리자 — 투자 설정 변경 (tradingMode, targetMode, 개별 설정 포함 가능)
 export const updateAdminConfig = (body) =>
   request('/api/strategy/admin/config', { method: 'PATCH', body: JSON.stringify(body) })
 

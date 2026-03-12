@@ -4,6 +4,7 @@ import com.axiom.order.dto.OrderRequest;
 import com.axiom.order.dto.OrderResponse;
 import com.axiom.order.entity.TradeOrder.OrderType;
 import com.axiom.order.service.OrderService;
+import com.axiom.order.store.TradingModeStore;
 import com.axiom.order.util.MarketHoursChecker;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -14,15 +15,15 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/orders")
 @RequiredArgsConstructor
 public class OrderController {
 
     private final OrderService orderService;
     private final MarketHoursChecker marketHoursChecker;
+    private final TradingModeStore tradingModeStore;
 
     // 매수 주문: POST /api/orders/buy
-    @PostMapping("/buy")
+    @PostMapping("/api/orders/buy")
     public ResponseEntity<?> buy(@RequestBody OrderRequest request) {
         if (!marketHoursChecker.isMarketOpen()) {
             return marketClosedResponse();
@@ -32,7 +33,7 @@ public class OrderController {
     }
 
     // 매도 주문: POST /api/orders/sell
-    @PostMapping("/sell")
+    @PostMapping("/api/orders/sell")
     public ResponseEntity<?> sell(@RequestBody OrderRequest request) {
         if (!marketHoursChecker.isMarketOpen()) {
             return marketClosedResponse();
@@ -49,15 +50,26 @@ public class OrderController {
         ));
     }
 
-    // 주문 내역 전체: GET /api/orders
-    @GetMapping
-    public ResponseEntity<List<OrderResponse>> getOrders() {
-        return ResponseEntity.ok(orderService.getAllOrders());
+    // 주문 내역: GET /api/orders?mode=paper|real (없으면 전체)
+    @GetMapping("/api/orders")
+    public ResponseEntity<List<OrderResponse>> getOrders(
+            @RequestParam(required = false) String mode) {
+        return ResponseEntity.ok(orderService.getOrdersByMode(mode));
     }
 
-    // 종목별 주문 내역: GET /api/orders?ticker=005930
-    @GetMapping("/ticker/{ticker}")
+    // 종목별 주문 내역: GET /api/orders/ticker/{ticker}
+    @GetMapping("/api/orders/ticker/{ticker}")
     public ResponseEntity<List<OrderResponse>> getOrdersByTicker(@PathVariable String ticker) {
         return ResponseEntity.ok(orderService.getOrdersByTicker(ticker));
+    }
+
+    // 내부 엔드포인트: 거래 모드 변경 전파
+    @PatchMapping("/internal/trading-mode")
+    public ResponseEntity<Void> updateTradingMode(@RequestBody Map<String, String> body) {
+        String mode = body.get("mode");
+        if (mode != null) {
+            tradingModeStore.setMode(mode);
+        }
+        return ResponseEntity.ok().build();
     }
 }

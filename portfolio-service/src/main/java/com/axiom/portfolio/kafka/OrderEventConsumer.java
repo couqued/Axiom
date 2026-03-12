@@ -21,19 +21,22 @@ public class OrderEventConsumer {
         String eventType = (String) event.get("eventType");
         if (!"ORDER_FILLED".equals(eventType)) return;
 
-        String ticker = (String) event.get("ticker");
-        String stockName = (String) event.get("stockName");
-        String orderType = (String) event.get("orderType");
-        int quantity = ((Number) event.get("quantity")).intValue();
-        BigDecimal price = new BigDecimal(event.get("price").toString());
+        String ticker      = (String) event.get("ticker");
+        String stockName   = (String) event.get("stockName");
+        String orderType   = (String) event.get("orderType");
+        int quantity       = ((Number) event.get("quantity")).intValue();
+        BigDecimal price   = new BigDecimal(event.get("price").toString());
+        String tradingMode = event.get("tradingMode") != null
+                ? (String) event.get("tradingMode")
+                : "paper"; // 레거시 이벤트 폴백
 
-        log.info("[Kafka] 주문 체결 이벤트 수신 - ticker: {}, type: {}, qty: {}, price: {}",
-                ticker, orderType, quantity, price);
+        log.info("[Kafka] 주문 체결 이벤트 수신 - ticker: {}, type: {}, qty: {}, price: {}, mode: {}",
+                ticker, orderType, quantity, price, tradingMode);
 
         if ("BUY".equals(orderType)) {
-            portfolioService.addPosition(ticker, stockName, quantity, price);
+            portfolioService.addPosition(ticker, stockName, quantity, price, tradingMode);
         } else if ("SELL".equals(orderType)) {
-            portfolioService.reducePosition(ticker, quantity, price);
+            portfolioService.reducePosition(ticker, quantity, price, tradingMode);
         }
     }
 }

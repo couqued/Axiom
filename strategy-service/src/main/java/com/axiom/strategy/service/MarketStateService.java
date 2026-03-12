@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.time.LocalTime;
 
 /**
  * 코스피 지수 20일 이평선 대비 현재 종가 위치로 시장 상태를 판별한다.
@@ -42,6 +43,11 @@ public class MarketStateService {
     private volatile BigDecimal todayOpenIndex;
     private volatile LocalDate  todayOpenDate;
 
+    // 당일 코스피 하락 매수 차단 상태
+    private volatile boolean    indexDropBlockedToday  = false;
+    private volatile boolean    indexDropCheckedToday  = false;
+    private volatile LocalDate  indexDropCheckDate     = null;
+
     public record IndexSnapshot(
             BigDecimal yesterdayClose,
             BigDecimal ma20,
@@ -54,6 +60,39 @@ public class MarketStateService {
 
     public IndexSnapshot getIndexSnapshot() {
         return new IndexSnapshot(yesterdayClose, ma20, todayOpenIndex);
+    }
+
+    public boolean isIndexDropBlockedToday() { return indexDropBlockedToday; }
+    public boolean isIndexDropCheckedToday() { return indexDropCheckedToday; }
+
+    /**
+     * 09:20 이후 당일 최초 1회 호출 — 전일 대비 하락률을 계산해 매수 차단 여부를 설정한다.
+     */
+    public void checkAndSetIndexDropBlock(BigDecimal currentIndex, double blockPct) {
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
+        if (indexDropCheckDate != null && indexDropCheckDate.equals(today)) return;
+
+        indexDropCheckDate    = today;
+        indexDropCheckedToday = true;
+
+        if (yesterdayClose == null || yesterdayClose.compareTo(BigDecimal.ZERO) <= 0 || blockPct <= 0) {
+            log.info("[MarketState] 지수 하락 체크 스킵 — yesterdayClose={}, blockPct={}", yesterdayClose, blockPct);
+            return;
+        }
+
+        double dropPct = yesterdayClose.subtract(currentIndex)
+                .divide(yesterdayClose, 4, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100))
+                .doubleValue();
+
+        if (dropPct >= blockPct) {
+            indexDropBlockedToday = true;
+            log.warn("[MarketState] 코스피 전일대비 {}% 하락 — 당일 매수 차단 (설정: {}%)",
+                    String.format("%.2f", dropPct), blockPct);
+        } else {
+            log.info("[MarketState] 코스피 전일대비 {}% → 매수 차단 없음 (설정: {}%)",
+                    String.format("%.2f", dropPct), blockPct);
+        }
     }
 
     /**
@@ -107,6 +146,10 @@ public class MarketStateService {
         this.ma20           = ma;
         // refresh 시 todayOpenIndex 초기화 → 다음 전략 실행 시 당일 최신값으로 재캡처
         this.todayOpenDate  = null;
+        // 당일 매수 차단 플래그 초기화
+        this.indexDropBlockedToday = false;
+        this.indexDropCheckedToday = false;
+        this.indexDropCheckDate    = null;
 
         MarketState newState = lastClose.compareTo(ma) > 0 ? MarketState.BULLISH : MarketState.SIDEWAYS;
         MarketState oldState = currentState.getAndSet(newState);

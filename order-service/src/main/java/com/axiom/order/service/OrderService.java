@@ -5,6 +5,7 @@ import com.axiom.order.dto.OrderResponse;
 import com.axiom.order.entity.TradeOrder;
 import com.axiom.order.kafka.OrderEventProducer;
 import com.axiom.order.repository.TradeOrderRepository;
+import com.axiom.order.store.TradingModeStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ public class OrderService {
     private final TradeOrderRepository orderRepository;
     private final KisOrderApiService kisOrderApiService;
     private final OrderEventProducer orderEventProducer;
+    private final TradingModeStore tradingModeStore;
 
     @Transactional
     public OrderResponse placeOrder(OrderRequest request) {
@@ -40,6 +42,7 @@ public class OrderService {
                 .strategyName(request.getStrategyName())
                 .marketState(request.getMarketState())
                 .closeReason(request.getCloseReason())
+                .tradingMode(tradingModeStore.getMode())
                 .build();
 
         order = orderRepository.save(order);
@@ -57,7 +60,8 @@ public class OrderService {
             order = orderRepository.save(order);
 
             orderEventProducer.publishOrderFilled(order);
-            log.info("주문 체결 완료 - orderId: {}, ticker: {}", order.getId(), order.getTicker());
+            log.info("주문 체결 완료 - orderId: {}, ticker: {}, mode: {}",
+                    order.getId(), order.getTicker(), order.getTradingMode());
 
         } catch (Exception e) {
             order.setStatus(TradeOrder.OrderStatus.FAILED);
@@ -71,6 +75,15 @@ public class OrderService {
 
     public List<OrderResponse> getAllOrders() {
         return orderRepository.findAllByOrderByCreatedAtDesc().stream()
+                .map(OrderResponse::from)
+                .collect(Collectors.toList());
+    }
+
+    public List<OrderResponse> getOrdersByMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return getAllOrders();
+        }
+        return orderRepository.findByTradingModeOrderByCreatedAtDesc(mode).stream()
                 .map(OrderResponse::from)
                 .collect(Collectors.toList());
     }

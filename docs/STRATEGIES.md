@@ -13,11 +13,12 @@
 5. [RSI + 볼린저밴드 통합 전략 (횡보장)](#5-rsi--볼린저밴드-통합-전략-횡보장)
 6. [트레일링 스탑](#6-트레일링-스탑)
 7. [타임 컷](#7-타임-컷)
-8. [스케줄러 전체 구조](#8-스케줄러-전체-구조)
-9. [설정 방법](#9-설정-방법)
-10. [포지션 사이징](#10-포지션-사이징)
-11. [종목 선정 우선순위 점수화 \[계획\]](#11-종목-선정-우선순위-점수화-계획)
-12. [하락장(BEARISH) 전략 \[계획\]](#12-하락장bearish-전략-계획)
+8. [개장 초 보호 + 지수 하락 매수 차단](#8-개장-초-보호--지수-하락-매수-차단)
+9. [스케줄러 전체 구조](#9-스케줄러-전체-구조)
+10. [설정 방법](#10-설정-방법)
+11. [포지션 사이징](#11-포지션-사이징)
+12. [종목 선정 우선순위 점수화 \[계획\]](#12-종목-선정-우선순위-점수화-계획)
+13. [하락장(BEARISH) 전략 \[계획\]](#13-하락장bearish-전략-계획)
 
 ---
 
@@ -48,6 +49,16 @@
 [Phase 1: 전체 종목 평가]
     SELL·트레일링 스탑·타임 컷 → 즉시 처리
     BUY → score 계산 후 buyQueue 수집 (① 시장경보 스킵 ② 보유 중 스킵)
+    ↓
+[Phase 1.5: 개장 초 보호 + 지수 하락 체크]
+    현재 시각 < 09:20? → BUY 후보 전체 스킵 (buyQueue.clear())
+    ↓
+    현재 시각 ≥ 09:20 + 당일 첫 체크?
+      → 코스피 현재 지수 조회
+      → 하락률 = (yesterdayClose - currentIndex) / yesterdayClose × 100
+      → 하락률 ≥ indexDropBlockPct% → 당일 BUY 전체 차단
+    ↓
+    indexDropBlockedToday == true (AND indexDropBlockPct > 0)? → BUY 스킵
     ↓
 [Phase 2: BUY score 정렬 → 상위 maxPositions개 매수]
     buyQueue.sort(score 내림차순)
@@ -310,7 +321,7 @@ RSI = 100 - (100 / (1 + RS))
 | 항목 | 값 |
 |------|-----|
 | 클래스 | `TrailingStopService` |
-| 설정 | `AdminConfigStore.trailingStopPct` (런타임 변경 가능) |
+| 설정 | `AdminConfigStore.getActiveSettings().trailingStopPct()` (런타임 변경 가능) |
 | 기본값 | `strategy.trailing-stop.stop-percent: 7.0` (yml → AdminConfigStore 초기화) |
 | 적용 범위 | 모든 보유 종목 |
 | 실행 시점 | `TrailingStopScheduler` 1분 주기 (보유 종목 전용) + `StrategyEngine.run()` 5분 주기 |
@@ -330,8 +341,8 @@ stopPrice = peakPrice × (1 - 7/100)   ← 청산 기준가
 
 ### 고점 초기화 및 재시작 복구
 
-- `peakPrices`는 `ConcurrentHashMap<String, BigDecimal>`에 저장 (메모리)
-- 상태 변경 시마다 `strategy.strategy_state` 테이블(type=PEAK_PRICE)에 즉시 동기화
+- `peakPrices`는 `ConcurrentHashMap<String, BigDecimal>`에 저장 (메모리), 키 형식: `"mode:ticker"` (예: `"paper:005930"`, `"real:000660"`)
+- 상태 변경 시마다 `strategy.strategy_state` 테이블(type=PEAK_PRICE_paper / PEAK_PRICE_real)에 즉시 동기화
 - **재시작 복구**: `@PostConstruct initFromPortfolio()`에서 DB 직접 로드 (타 서비스 기동 순서 무관)
   - 고점 갱신: 실제 값이 변경된 경우에만 DB write (불필요한 write 방지)
   - 복구 후 다음 체크 시 현재가가 더 높으면 자동으로 고점 갱신
@@ -357,7 +368,7 @@ GET /api/strategy/admin/trailing-stop-status
 | 항목 | 값 |
 |------|-----|
 | 클래스 | `TimeCutService` |
-| 설정 | `AdminConfigStore.timeCutDays` (런타임 변경 가능) |
+| 설정 | `AdminConfigStore.getActiveSettings().timeCutDays()` (런타임 변경 가능) |
 | 기본값 | `strategy.time-cut.max-holding-days: 3` (yml → AdminConfigStore 초기화) |
 | 적용 전략 | `rsi-bollinger` (applicable-strategies 목록) |
 | 실행 시점 | StrategyEngine.run() 내 (5분 주기) |
@@ -366,7 +377,7 @@ GET /api/strategy/admin/trailing-stop-status
 
 ```
 RSI+볼린저 전략으로 BUY 발생 시:
-  buyDates[ticker] = LocalDate.now()  ← 매수일 기록
+  buyDates["mode:ticker"] = LocalDate.now()  ← 매수일 기록 (예: "paper:005930")
 
 5분 주기 실행 시 각 ticker 확인:
   경과 거래일 = TradingCalendar.tradingDaysBetween(buyDate, today)
@@ -388,8 +399,8 @@ tradingDaysBetween(Monday, Friday)    = 3   // 강제 청산!
 
 ### 재시작 복구
 
-- `buyDates`는 `ConcurrentHashMap<String, LocalDate>`에 저장 (메모리)
-- 상태 변경 시마다 `strategy.strategy_state` 테이블(type=BUY_DATE)에 즉시 동기화
+- `buyDates`는 `ConcurrentHashMap<String, LocalDate>`에 저장 (메모리), 키 형식: `"mode:ticker"` (예: `"paper:005930"`, `"real:000660"`)
+- 상태 변경 시마다 `strategy.strategy_state` 테이블(type=BUY_DATE_paper / BUY_DATE_real)에 즉시 동기화
 - **재시작 복구**: `@PostConstruct initFromOrders()`에서 DB 직접 로드 (타 서비스 기동 순서 무관)
   - order-service/portfolio-service HTTP 호출 없이 자체 DB에서 즉시 복구
   - `recordBuy()` 호출 시 메모리 + DB 동시 저장, `clearBuy()` 시 메모리 + DB 동시 삭제
@@ -409,7 +420,52 @@ GET /api/strategy/admin/time-cut-status
 
 ---
 
-## 8. 스케줄러 전체 구조
+## 8. 개장 초 보호 + 지수 하락 매수 차단
+
+### 목표
+
+- 개장 초(09:05~09:19) 고변동성 구간 신규 매수 방지
+- 코스피 급락 당일 추가 손실 방지
+
+### 동작 방식
+
+```
+StrategyEngine.run() (09:05~15:20 매 5분)
+  ↓
+Phase 1.5 — BUY 가드
+
+현재 시각 < 09:20 → buyQueue.clear() (BUY 스킵)
+  ↓
+현재 시각 ≥ 09:20 + 당일 미체크 →
+  코스피 지수 현재가 조회 (getIndexCandles, 2개)
+  하락률 = (yesterdayClose - currentIndex) / yesterdayClose × 100
+  하락률 ≥ indexDropBlockPct% → indexDropBlockedToday = true
+  ↓
+indexDropBlockedToday == true AND indexDropBlockPct > 0 →
+  buyQueue.clear() (당일 BUY 전체 스킵)
+  ↓
+정상 BUY 진행
+```
+
+### 설정
+
+| 항목 | 기본값 | 설명 |
+|------|--------|------|
+| `indexDropBlockPct` | `1.0` | 하락률 임계값(%). 0으로 설정 시 비활성화 |
+
+- Admin UI "투자 설정 → 지수 하락 매수차단 (%)" 또는 API로 런타임 변경
+- 다음날 08:30 자동 초기화 (`MarketStateService.refresh()`)
+
+### 수동 해제
+
+당일 차단이 발동된 후 매수를 재개하려면:
+Admin UI → "지수 하락 매수차단 (%)" → `0` 입력 → 설정 저장
+
+> `indexDropBlockPct = 0`이면 `indexDropBlockedToday` 플래그가 true여도 BUY 가드를 건너뜁니다.
+
+---
+
+## 9. 스케줄러 전체 구조
 
 | Cron | 클래스 | 역할 | Slack 알림 |
 |------|--------|------|-----------|
@@ -418,6 +474,8 @@ GET /api/strategy/admin/time-cut-status
 | `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략 검증 포함) | 🔔 종목별 매수가·매도 주문가 포함 / 대상 없으면 "대상 없음" |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 | — (15:25 일일 요약으로 취합) |
 | `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) | — (발동 시만 🛑 알림) |
+| `0 0 10-15 * * MON-FRI` | `StrategyScheduler` | 직전 1시간 실행 요약 Slack 발송 | 🕐 시간별 요약 |
+| `0 22 15 * * MON-FRI` | `StrategyScheduler` | 15시대 실행 요약 Slack 발송 | 🕐 시간별 요약 (15시) |
 | `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 | 🔔 종목별 개별 알림 |
 | `0 25 15 * * MON-FRI` | `DailySummaryCollector` | 전략 실행 일일 요약 발송 + 카운터 초기화 | 📊 일일 요약 (실행횟수·매수·매도·스킵 종목 포함) |
 | `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) | — |
@@ -471,36 +529,59 @@ if (hour == 15 && minute > 20) return;
 
 ---
 
-## 9. 설정 방법
+## 10. 설정 방법
 
 ### 런타임 관리자 설정 (AdminConfigStore)
 
 `application.yml` 재시작 없이 실시간으로 매매 동작을 변경할 수 있습니다.
 
 ```bash
-# 매매 긴급 정지 (StrategyEngine.run() 스킵, ForceExitScheduler는 항상 동작)
+# 매매 긴급 정지 (특정 모드만, ?targetMode 없으면 active 모드)
 POST http://localhost:8084/api/strategy/admin/pause
+POST http://localhost:8084/api/strategy/admin/pause?targetMode=paper
+POST http://localhost:8084/api/strategy/admin/pause?targetMode=real
 
 # 매매 재개
 POST http://localhost:8084/api/strategy/admin/resume
+POST http://localhost:8084/api/strategy/admin/resume?targetMode=paper
 
-# 투자 설정 변경 (null 필드는 기존 값 유지)
+# 투자 설정 변경 (null 필드는 기존 값 유지, targetMode 없으면 active 모드 설정)
 PATCH http://localhost:8084/api/strategy/admin/config
 {
+  "targetMode": "paper",
   "investAmountKrw": 300000,
   "maxPositions": 2,
   "trailingStopPct": 5.0,
-  "timeCutDays": 5
+  "timeCutDays": 5,
+  "indexDropBlockPct": 1.0
 }
+
+# 거래 모드 전환 (paper ↔ real)
+PATCH http://localhost:8084/api/strategy/admin/config
+{ "tradingMode": "real" }
 
 # 현재 설정 조회
 GET http://localhost:8084/api/strategy/admin/status
 → {
-    "paused": false,
-    "investAmountKrw": 500000,
-    "maxPositions": 3,
-    "trailingStopPct": 7.0,
-    "timeCutDays": 3
+    "tradingMode": "paper",
+    "paper": {
+      "paused": false,
+      "investAmountKrw": 500000,
+      "maxPositions": 3,
+      "trailingStopPct": 7.0,
+      "timeCutDays": 3,
+      "indexDropBlockPct": 1.0
+    },
+    "real": {
+      "paused": false,
+      "investAmountKrw": 1000000,
+      "maxPositions": 3,
+      "trailingStopPct": 7.0,
+      "timeCutDays": 3,
+      "indexDropBlockPct": 1.0
+    },
+    "indexDropBlockedToday": false,
+    "indexDropCheckedToday": false
   }
 ```
 
@@ -513,11 +594,19 @@ GET http://localhost:8084/api/strategy/admin/status
 
 | 항목 | 필드 | yml 기본값 | 적용 시점 |
 |------|------|-----------|----------|
-| 1회 매수금액 | `investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
-| 최대 보유 종목 수 | `maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
-| 트레일링 스탑 % | `trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
-| 타임 컷 거래일 | `timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
-| 매매 중단 여부 | `paused` | `false` | 즉시 |
+| 거래 모드 | `tradingMode` | `"paper"` | 즉시 |
+| (paper) 1회 매수금액 | `paper.investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
+| (real) 1회 매수금액 | `real.investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
+| (paper) 최대 보유 종목 수 | `paper.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
+| (real) 최대 보유 종목 수 | `real.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
+| (paper) 트레일링 스탑 % | `paper.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
+| (real) 트레일링 스탑 % | `real.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
+| (paper) 타임 컷 거래일 | `paper.timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
+| (real) 타임 컷 거래일 | `real.timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
+| (paper) 지수 하락 매수차단 % | `paper.indexDropBlockPct` | `1.0` (하드코딩) | 다음 5분 사이클 |
+| (real) 지수 하락 매수차단 % | `real.indexDropBlockPct` | `1.0` (하드코딩) | 다음 5분 사이클 |
+| (paper) 매매 중단 여부 | `paper.paused` | `false` | 즉시 |
+| (real) 매매 중단 여부 | `real.paused` | `false` | 즉시 |
 
 ### application.yml 전체 예시
 
@@ -623,7 +712,7 @@ strategy:
 
 ---
 
-## 10. 포지션 사이징
+## 11. 포지션 사이징
 
 ### 개요
 
@@ -688,7 +777,7 @@ if (effective >= maxPositions) skip;  // 실시간 카운터로 초과 방지
 
 ---
 
-## 11. 종목 선정 우선순위 점수화
+## 12. 종목 선정 우선순위 점수화
 
 ### 개요
 
@@ -751,7 +840,7 @@ Phase 2 — BUY 실행:
 
 ---
 
-## 12. 하락장(BEARISH) 전략 [계획]
+## 13. 하락장(BEARISH) 전략 [계획]
 
 ### 현재 문제
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getOrders, getStockPrice } from '../api/stockApi'
+import { getOrders, getStockPrice, getAdminStatus } from '../api/stockApi'
 
 const CLOSE_REASON_KO = {
   SIGNAL: '전략 신호',
@@ -16,24 +16,42 @@ const MARKET_KO = { BULLISH: '상승장', SIDEWAYS: '횡보장' }
 
 function formatDate(dt) {
   if (!dt) return ''
-  const d = new Date(dt)
-  return d.toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' }).replace('. ', '.').replace('.', '') +
-    ' ' + d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })
+  const d = new Date(dt + 'Z')
+  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+  const yy  = String(kst.getUTCFullYear()).slice(2)
+  const mm  = String(kst.getUTCMonth() + 1).padStart(2, '0')
+  const dd  = String(kst.getUTCDate()).padStart(2, '0')
+  const hh  = String(kst.getUTCHours()).padStart(2, '0')
+  const min = String(kst.getUTCMinutes()).padStart(2, '0')
+  return `${yy}.${mm}.${dd}. ${hh}:${min}`
 }
 
 export default function TradeHistory() {
   const [orders, setOrders] = useState([])
-  const [stockNames, setStockNames] = useState({}) // { ticker: stockName } — 숫자 종목명 보정용
+  const [stockNames, setStockNames] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [activeMode, setActiveMode] = useState(null) // 서버 활성 모드
+  const [modeFilter, setModeFilter] = useState(null) // null = 초기화 전
 
-  const load = () => {
+  // 서버 활성 모드 조회 → 초기 필터로 사용
+  useEffect(() => {
+    getAdminStatus()
+      .then(s => {
+        const mode = s.tradingMode || 'paper'
+        setActiveMode(mode)
+        setModeFilter(mode)
+      })
+      .catch(() => setModeFilter('paper'))
+  }, [])
+
+  const load = (mode) => {
     setLoading(true)
-    getOrders()
+    getOrders(mode)
       .then(data => {
         setOrders(data)
         const numericTickers = [...new Set(
-          data.filter(o => /^\d+$/.test(o.stockName)).map(o => o.ticker)
+          data.filter(o => !o.stockName || /^\d+$/.test(o.stockName)).map(o => o.ticker)
         )]
         if (numericTickers.length > 0) {
           Promise.all(numericTickers.map(t => getStockPrice(t).catch(() => null)))
@@ -50,62 +68,91 @@ export default function TradeHistory() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (modeFilter !== null) load(modeFilter)
+  }, [modeFilter])
 
-  if (loading) return <div className="loading">로딩 중...</div>
-  if (error) return <div className="error">오류: {error}</div>
+  const handleModeChange = (mode) => {
+    setModeFilter(mode)
+    setError(null)
+  }
+
+  if (modeFilter === null) return <div className="loading">로딩 중...</div>
 
   return (
     <div className="page">
       <div className="page-header">
         <h2>매매 내역</h2>
-        <button className="refresh-btn" onClick={load}>새로고침</button>
+        <button className="refresh-btn" onClick={() => load(modeFilter)}>새로고침</button>
       </div>
 
-      {orders.length === 0 ? (
-        <p className="empty">매매 내역이 없습니다.</p>
-      ) : (
-        <div className="history-list">
-          {orders.map(o => {
-            const isBuy = o.orderType === 'BUY'
-            const strategyLabel = o.strategyName ? STRATEGY_KO[o.strategyName] ?? o.strategyName : null
-            const marketLabel = o.marketState ? MARKET_KO[o.marketState] ?? o.marketState : null
-            const closeLabel = o.closeReason ? CLOSE_REASON_KO[o.closeReason] ?? o.closeReason : null
+      {/* 모드 필터 탭 */}
+      <div className="mode-filter-tabs">
+        <button
+          className={`mode-tab-btn ${modeFilter === 'paper' ? 'active' : ''}`}
+          onClick={() => handleModeChange('paper')}
+        >
+          모의투자
+          {activeMode === 'paper' && <span className="active-dot" />}
+        </button>
+        <button
+          className={`mode-tab-btn real ${modeFilter === 'real' ? 'active' : ''}`}
+          onClick={() => handleModeChange('real')}
+        >
+          운영 (실계좌)
+          {activeMode === 'real' && <span className="active-dot" />}
+        </button>
+      </div>
 
-            return (
-              <div key={o.id} className={`history-card ${isBuy ? 'buy' : 'sell'}`}>
-                <div className="history-card-header">
-                  <span className={`order-type ${isBuy ? 'buy' : 'sell'}`}>
-                    {isBuy ? '매수' : '매도'}
-                  </span>
-                  <span className="history-date">{formatDate(o.createdAt)}</span>
-                  <span className="history-status">{o.status === 'FILLED' ? '●체결' : o.status}</span>
-                </div>
-                <div className="history-stock">
-                  <span className="stock-name">{/^\d+$/.test(o.stockName) ? (stockNames[o.ticker] || o.stockName) : o.stockName}</span>
-                  <span className="ticker">{o.ticker}</span>
-                </div>
-                <div className="history-amount">
-                  {o.quantity}주 × {Number(o.price).toLocaleString()}원 ={' '}
-                  <strong>{Number(o.totalAmount).toLocaleString()}원</strong>
-                </div>
-                {(strategyLabel || closeLabel || marketLabel) && (
-                  <div className="history-meta">
-                    {isBuy && strategyLabel && (
-                      <span className="history-tag strategy">{strategyLabel}</span>
-                    )}
-                    {!isBuy && closeLabel && (
-                      <span className="history-tag close">{closeLabel}</span>
-                    )}
-                    {marketLabel && (
-                      <span className="history-tag market">{marketLabel}</span>
-                    )}
+      {loading && <div className="loading">로딩 중...</div>}
+      {error && <div className="error">오류: {error}</div>}
+
+      {!loading && !error && (
+        orders.length === 0 ? (
+          <p className="empty">매매 내역이 없습니다.</p>
+        ) : (
+          <div className="history-list">
+            {orders.map(o => {
+              const isBuy = o.orderType === 'BUY'
+              const strategyLabel = o.strategyName ? STRATEGY_KO[o.strategyName] ?? o.strategyName : null
+              const marketLabel = o.marketState ? MARKET_KO[o.marketState] ?? o.marketState : null
+              const closeLabel = o.closeReason ? CLOSE_REASON_KO[o.closeReason] ?? o.closeReason : null
+
+              return (
+                <div key={o.id} className={`history-card ${isBuy ? 'buy' : 'sell'}`}>
+                  <div className="history-card-header">
+                    <span className={`order-type ${isBuy ? 'buy' : 'sell'}`}>
+                      {isBuy ? '매수' : '매도'}
+                    </span>
+                    <span className="history-date">{formatDate(o.createdAt)}</span>
+                    <span className="history-status">{o.status === 'FILLED' ? '●체결' : o.status}</span>
                   </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+                  <div className="history-stock">
+                    <span className="stock-name">{(!o.stockName || /^\d+$/.test(o.stockName)) ? (stockNames[o.ticker] || o.ticker) : o.stockName}</span>
+                    <span className="ticker">{o.ticker}</span>
+                  </div>
+                  <div className="history-amount">
+                    {o.quantity}주 × {Number(o.price).toLocaleString()}원 ={' '}
+                    <strong>{Number(o.totalAmount).toLocaleString()}원</strong>
+                  </div>
+                  {(strategyLabel || closeLabel || marketLabel) && (
+                    <div className="history-meta">
+                      {isBuy && strategyLabel && (
+                        <span className="history-tag strategy">{strategyLabel}</span>
+                      )}
+                      {!isBuy && closeLabel && (
+                        <span className="history-tag close">{closeLabel}</span>
+                      )}
+                      {marketLabel && (
+                        <span className="history-tag market">{marketLabel}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )
       )}
     </div>
   )

@@ -7,6 +7,65 @@
 
 ## [Unreleased]
 
+### Added
+
+**모의투자 ↔ 운영 모드 런타임 전환**
+
+- Admin UI에서 거래 모드(모의투자/운영) 런타임 전환 기능 추가
+- 모드별 독립 설정: invest금액·최대종목수·trailing stop·time cut·지수차단율·paused 상태
+- 모드별 독립 데이터: portfolio DB(`trading_mode` 컬럼), 매매내역, BUY랭킹, 실행이력
+- `AdminConfigStore` 중첩 구조(`ModeSettings`)로 리팩터링 + `admin-config.json` 포맷 변경
+- `AdminStatusDto` / `AdminConfigDto` 구조 변경 (`tradingMode`, `paper`, `real` 중첩)
+- `ModeClient` 신규: strategy→order·portfolio 모드 전파 (`PATCH /internal/trading-mode`)
+- `TradingModeStore` 신규 (order-service, portfolio-service): 런타임 모드 관리
+- `TradeOrder` / `Portfolio` 엔티티에 `tradingMode` 컬럼 추가
+- `StrategyStateStore` key 형식 변경: `"PEAK_PRICE_paper"` / `"PEAK_PRICE_real"` (스키마 변경 없음)
+- `KisOrderApiService` / `KisAccountApiService`: 런타임 모드 기반 TR_ID·계좌번호 선택
+- `InternalTokenController`: `?mode=paper|real` 파라미터 추가
+- 매매내역 페이지: 모드 필터 탭(모의투자/운영) 추가
+- 전략 페이지: 현재 모드 뱃지 표시
+
+**DB 마이그레이션 (ddl-auto: update로 컬럼 자동 추가)**
+
+```sql
+-- order-service: trading_mode 컬럼 추가 (자동)
+-- portfolio-service: trading_mode 컬럼 추가 + UK 변경 (수동 필요)
+ALTER TABLE portfolio.portfolio
+    DROP CONSTRAINT IF EXISTS portfolio_ticker_key;
+ALTER TABLE portfolio.portfolio
+    ADD COLUMN IF NOT EXISTS trading_mode VARCHAR(10) DEFAULT 'paper';
+UPDATE portfolio.portfolio SET trading_mode = 'paper' WHERE trading_mode IS NULL;
+ALTER TABLE portfolio.portfolio
+    ADD CONSTRAINT uk_ticker_mode UNIQUE (ticker, trading_mode);
+```
+
+---
+
+**strategy-service — 개장 초 BUY 스킵 + 코스피 하락 매수 차단**
+
+- **09:20 이전 BUY 전체 스킵**: 개장 초(09:05~09:19) 고변동성 구간 신규 매수 차단
+- **코스피 하락 매수 차단**: 09:20에 코스피 전일대비 하락률 1회 체크
+  - 하락률 ≥ `indexDropBlockPct`(%) 이면 당일 BUY 전체 차단
+  - 다음날 08:30 `MarketStateService.refresh()` 시 자동 초기화
+  - 수동 해제: Admin UI에서 `지수 하락 매수차단 (%)` → `0` 저장
+- `AdminConfigStore`에 `indexDropBlockPct` 필드 추가 (기본값 1.0%)
+- Admin UI "투자 설정"에 "지수 하락 매수차단 (%)" 필드 추가
+
+### Fixed
+
+**strategy-service — Slack 시간별 요약 알림 버그 3건**
+
+- **타이밍 버그**: Spring 스케줄러가 정각 수백ms 이전에 실행되어 `getHour()`가 한 시간 앞을 반환하던 문제
+  → `LocalTime.now().plusMinutes(1).getHour() - 1`로 수정
+- **pod 재시작 후 무음 스킵**: `todayRuns` 비어있을 때 로그 없이 조용히 리턴
+  → WARN 로그 추가 (`[Scheduler] 시간별 요약 스킵 — X시 실행 이력 없음`)
+- **스케줄러 단일 스레드 문제**: 기본값 pool.size=1로 장시간 실행 task가 정각 알림 지연
+  → `spring.task.scheduling.pool.size=3` 설정
+
+### Changed
+
+- `SlackNotifier.send()` WebClient timeout 10초 추가 (무한 blocking 방지)
+
 ---
 
 ## [0.6.0] - 2026-03-06

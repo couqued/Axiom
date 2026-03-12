@@ -1,6 +1,8 @@
 package com.axiom.order.service;
 
 import com.axiom.order.config.KisApiConfig;
+import com.axiom.order.store.TradingModeStore;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -15,18 +17,29 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class KisOrderApiService {
 
-    private final WebClient kisWebClient;
     private final KisApiConfig kisApiConfig;
     private final KisTokenService kisTokenService;
+    private final TradingModeStore tradingModeStore;
+
+    private WebClient paperClient;
+    private WebClient realClient;
+
+    @PostConstruct
+    void initClients() {
+        if (!kisApiConfig.isMock()) {
+            paperClient = WebClient.builder().baseUrl(kisApiConfig.getPaper().getBaseUrl()).build();
+            realClient  = WebClient.builder().baseUrl(kisApiConfig.getReal().getBaseUrl()).build();
+        }
+    }
 
     public String placeOrder(String ticker, String orderType, int quantity, BigDecimal price) {
-        if (kisApiConfig.isMock()) {
+        if (tradingModeStore.isMock()) {
             return placeMockOrder(ticker, orderType, quantity, price);
         }
         return placeKisOrder(ticker, orderType, quantity, price);
     }
 
-    // ── Mock ────────────────────────────────────────────────────────────────
+    // ── Mock ─────────────────────────────────────────────────────────────────
 
     private String placeMockOrder(String ticker, String orderType, int quantity, BigDecimal price) {
         String mockOrderId = "MOCK-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
@@ -35,19 +48,23 @@ public class KisOrderApiService {
         return mockOrderId;
     }
 
-    // ── Paper / Real ────────────────────────────────────────────────────────
+    // ── Paper / Real ──────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
     private String placeKisOrder(String ticker, String orderType, int quantity, BigDecimal price) {
-        KisApiConfig.ModeConfig active = kisApiConfig.getActive();
+        String currentMode = tradingModeStore.getMode();
+        boolean isPaper = tradingModeStore.isPaper();
+
+        KisApiConfig.ModeConfig modeConfig = isPaper ? kisApiConfig.getPaper() : kisApiConfig.getReal();
+        WebClient wc = isPaper ? paperClient : realClient;
         String token = kisTokenService.getAccessToken();
 
         boolean isBuy = "BUY".equals(orderType);
-        String trId = kisApiConfig.isPaper()
+        String trId = isPaper
                 ? (isBuy ? "VTTC0802U" : "VTTC0801U")
                 : (isBuy ? "TTTC0802U" : "TTTC0801U");
 
-        String[] accountParts = active.getAccountNo().split("-");
+        String[] accountParts = modeConfig.getAccountNo().split("-");
 
         Map<String, String> body = Map.of(
                 "CANO",         accountParts[0],
@@ -59,20 +76,20 @@ public class KisOrderApiService {
         );
 
         log.info("[KIS-{}] 주문 요청 - ticker: {}, type: {}, qty: {}, price: {}, tr_id: {}",
-                kisApiConfig.getMode().toUpperCase(), ticker, orderType, quantity, price, trId);
+                currentMode.toUpperCase(), ticker, orderType, quantity, price, trId);
 
-        Map<String, Object> response = kisWebClient.post()
+        Map<String, Object> response = wc.post()
                 .uri("/uapi/domestic-stock/v1/trading/order-cash")
                 .header("authorization", "Bearer " + token)
-                .header("appkey",        active.getAppKey())
-                .header("appsecret",     active.getAppSecret())
+                .header("appkey",        modeConfig.getAppKey())
+                .header("appsecret",     modeConfig.getAppSecret())
                 .header("tr_id",         trId)
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .block();
 
-        log.info("[KIS-{}] 주문 응답: {}", kisApiConfig.getMode().toUpperCase(), response);
+        log.info("[KIS-{}] 주문 응답: {}", currentMode.toUpperCase(), response);
 
         String rtCd = (String) response.get("rt_cd");
         if (!"0".equals(rtCd)) {
@@ -82,7 +99,7 @@ public class KisOrderApiService {
 
         Map<String, String> output = (Map<String, String>) response.get("output");
         String orderId = output.get("ODNO");
-        log.info("[KIS-{}] 주문 완료 - orderId: {}", kisApiConfig.getMode().toUpperCase(), orderId);
+        log.info("[KIS-{}] 주문 완료 - orderId: {}", currentMode.toUpperCase(), orderId);
         return orderId;
     }
 }

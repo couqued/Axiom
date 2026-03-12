@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Duration;
 import java.util.Map;
 
 @Slf4j
@@ -257,7 +258,9 @@ public class SlackNotifier {
                     .bodyValue(Map.of("text", text))
                     .retrieve()
                     .bodyToMono(String.class)
+                    .timeout(Duration.ofSeconds(10))
                     .block();
+            log.debug("[Slack] 발송 완료");
         } catch (Exception e) {
             log.error("[Slack] 알림 발송 실패: {}", e.getMessage());
         }

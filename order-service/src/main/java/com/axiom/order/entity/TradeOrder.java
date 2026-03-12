@@ -54,6 +54,9 @@ public class TradeOrder {
     @Column(length = 30)
     private String closeReason;    // "SIGNAL", "TRAILING_STOP", "TIME_CUT", "FORCE_EXIT"
 
+    @Column(length = 10)
+    private String tradingMode;    // "paper" | "real"
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 

@@ -151,6 +151,128 @@
 }
 .admin-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ── 거래 모드 토글 ──────────────────────────────────────────────────── */
+
+.mode-toggle-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-toggle-btn {
+  flex: 1;
+  padding: 11px;
+  border-radius: 10px;
+  border: 1px solid #2d2d3a;
+  background: #0f1117;
+  color: #888;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.mode-toggle-btn.active {
+  background: #0d1a2d;
+  color: #7dccff;
+  border-color: #1a3d6e;
+}
+.mode-toggle-btn.real.active {
+  background: #1f0a0a;
+  color: #ff9f9f;
+  border-color: #6e1a1a;
+}
+.mode-toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.mode-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.mode-badge.paper {
+  background: #0d1a2d;
+  color: #7dccff;
+  border: 1px solid #1a3d6e;
+}
+.mode-badge.real {
+  background: #1f0a0a;
+  color: #ff9f9f;
+  border: 1px solid #6e1a1a;
+}
+
+.admin-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 설정 탭 */
+.mode-settings-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.mode-tab-btn {
+  flex: 1;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #2d2d3a;
+  background: #0f1117;
+  color: #666;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s;
+}
+.mode-tab-btn.active {
+  background: #0d1a2d;
+  color: #7dccff;
+  border-color: #1a3d6e;
+}
+.mode-tab-btn.real.active {
+  background: #1f0a0a;
+  color: #ff9f9f;
+  border-color: #6e1a1a;
+}
+
+.tab-paused-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #ff6b6b;
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.admin-toggle-btn.small {
+  width: auto;
+  padding: 6px 14px;
+  font-size: 12px;
+  margin-bottom: 0;
+}
+
+/* 매매내역 모드 필터 */
+.mode-filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.active-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #7dffaa;
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+  box-shadow: 0 0 4px #7dffaa88;
+}
+
 .admin-future { opacity: 0.6; }
 
 .admin-future-list {
@@ -1029,3 +1151,12 @@ body {
   min-width: 42px;
   text-align: center;
 }
+
+/* 지수 하락 차단 상태 배지 */
+.index-drop-status, .index-drop-badge {
+  font-size: 12px;
+  margin-top: 4px;
+}
+.index-drop-status.blocked, .index-drop-badge.blocked { color: #ef4444; }
+.index-drop-status.ok,      .index-drop-badge.ok      { color: #22c55e; }
+.index-drop-status.checking,.index-drop-badge.checking { color: #f59e0b; }

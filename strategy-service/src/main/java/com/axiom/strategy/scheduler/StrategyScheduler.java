@@ -57,7 +57,7 @@ public class StrategyScheduler {
     @Scheduled(cron = "0 0 10-15 * * MON-FRI", zone = "Asia/Seoul")
     public void sendHourlyReport() {
         if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) return;
-        int prevHour = LocalTime.now(TradingCalendar.KST).getHour() - 1;
+        int prevHour = LocalTime.now(TradingCalendar.KST).plusMinutes(1).getHour() - 1;
         sendHourlySlack(prevHour);
     }
 
@@ -69,10 +69,14 @@ public class StrategyScheduler {
     }
 
     private void sendHourlySlack(int hour) {
+        log.info("[Scheduler] 시간별 요약 Slack 시도 — {}시", hour);
         List<StrategyEngine.RunRecord> hrRuns = strategyEngine.getTodayRuns().stream()
                 .filter(r -> r.runAt().getHour() == hour)
                 .collect(Collectors.toList());
-        if (hrRuns.isEmpty()) return;
+        if (hrRuns.isEmpty()) {
+            log.warn("[Scheduler] 시간별 요약 스킵 — {}시 실행 이력 없음 (pod 재시작?)", hour);
+            return;
+        }
 
         int evaluated = hrRuns.stream().mapToInt(StrategyEngine.RunRecord::evaluated).sum();
         int bought    = hrRuns.stream().mapToInt(StrategyEngine.RunRecord::bought).sum();
@@ -89,6 +93,7 @@ public class StrategyScheduler {
         long noSignalCount = hrRuns.stream()
                 .filter(r -> r.bought() == 0 && r.skippedList().isEmpty()).count();
 
+        log.info("[Scheduler] 시간별 요약 Slack 발송 — {}시, {}회 실행", hour, hrRuns.size());
         slackNotifier.sendHourlySummary(hour, hrRuns.size(), evaluated,
                 bought, sold, errors, boughtTickers, skipSummary, noSignalCount);
     }

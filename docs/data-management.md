@@ -43,6 +43,7 @@ axiom (database)
 | strategy_name | VARCHAR(50) | 전략명 (`golden-cross` 등) |
 | market_state | VARCHAR(20) | 시장상태 (`BULLISH` / `SIDEWAYS`) |
 | close_reason | VARCHAR(30) | 청산사유 (아래 표 참고) |
+| trading_mode | VARCHAR(10) | 거래 모드 (`paper` / `real`) |
 | created_at | TIMESTAMP | 주문 생성 시각 |
 | filled_at | TIMESTAMP | 체결 시각 |
 
@@ -117,16 +118,18 @@ handleSignal()
 
 | 값 | 관리 클래스 | value 형식 | 설명 |
 |----|-----------|-----------|------|
-| `PEAK_PRICE` | `TrailingStopService` | `BigDecimal.toPlainString()` | 종목별 고점 가격 |
-| `BUY_DATE` | `TimeCutService` | `LocalDate.toString()` (yyyy-MM-dd) | rsi-bollinger 매수일 |
+| `PEAK_PRICE_paper` | `TrailingStopService` | `BigDecimal.toPlainString()` | 모의투자 모드 종목별 고점 가격 |
+| `PEAK_PRICE_real` | `TrailingStopService` | `BigDecimal.toPlainString()` | 운영 모드 종목별 고점 가격 |
+| `BUY_DATE_paper` | `TimeCutService` | `LocalDate.toString()` (yyyy-MM-dd) | 모의투자 rsi-bollinger 매수일 |
+| `BUY_DATE_real` | `TimeCutService` | `LocalDate.toString()` (yyyy-MM-dd) | 운영 rsi-bollinger 매수일 |
 | `TODAY_BOUGHT` | `VolatilityBreakoutStrategy` | `LocalDate.toString()` (yyyy-MM-dd) | 변동성 돌파 당일 매수일 |
 
 **저장/갱신 시점:**
 
 | type | 저장 | 삭제 |
 |------|------|------|
-| `PEAK_PRICE` | 고점 신규 진입 또는 갱신 시 (실제 값이 변경된 경우에만) | 포지션 청산 또는 트레일링 스탑 발동 시 |
-| `BUY_DATE` | rsi-bollinger BUY 체결 시 | SELL 체결 또는 타임컷 발동 시 |
+| `PEAK_PRICE_paper` / `PEAK_PRICE_real` | 고점 신규 진입 또는 갱신 시 (실제 값이 변경된 경우에만) | 포지션 청산 또는 트레일링 스탑 발동 시 |
+| `BUY_DATE_paper` / `BUY_DATE_real` | rsi-bollinger BUY 체결 시 | SELL 체결 또는 타임컷 발동 시 |
 | `TODAY_BOUGHT` | volatility-breakout BUY 체결 시 | 15:20 강제청산 또는 09:05 오버나이트 청산 시 |
 
 ---
@@ -137,11 +140,15 @@ handleSignal()
 
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| ticker | VARCHAR(10) PK | 종목코드 |
+| id | BIGSERIAL PK | |
+| ticker | VARCHAR(10) | 종목코드 |
+| trading_mode | VARCHAR(10) | 거래 모드 (`paper` / `real`) |
 | stock_name | VARCHAR(50) | 종목명 (추가 매수 시 최신값으로 자동 갱신) |
 | quantity | INT | 수량 |
 | avg_price | NUMERIC(15,2) | 평균 매수단가 |
 | total_invest | NUMERIC(15,2) | 총 투자금액 |
+
+**UNIQUE 제약: (ticker, trading_mode)**
 
 ---
 
@@ -153,12 +160,13 @@ handleSignal()
 ### TrailingStopService.peakPrices
 
 ```
-Map<String, BigDecimal>  →  { ticker: 고점가격 }
+Map<String, BigDecimal>  →  { "mode:ticker": 고점가격 }
+예: { "paper:005930": 78500, "real:000660": 195000 }
 ```
 
 | 항목 | 내용 |
 |------|------|
-| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=PEAK_PRICE) |
+| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=PEAK_PRICE_paper / PEAK_PRICE_real) |
 | 갱신 주기 | 1분마다 TrailingStopScheduler.check() + 5분마다 StrategyEngine.check() → max(기존고점, 현재가)로 갱신 |
 | 재시작 복구 | `@PostConstruct initFromPortfolio()` → `strategy.strategy_state`에서 직접 로드 |
 | 삭제 시점 | 포지션 청산 시 (매도 또는 트레일링 스탑 발동) — 메모리 + DB 동시 삭제 |
@@ -180,12 +188,13 @@ remainingPct = remainingAmt / currentPrice × 100
 ### TimeCutService.buyDates
 
 ```
-Map<String, LocalDate>  →  { ticker: 매수일 }
+Map<String, LocalDate>  →  { "mode:ticker": 매수일 }
+예: { "paper:005930": 2026-03-10, "real:000660": 2026-03-11 }
 ```
 
 | 항목 | 내용 |
 |------|------|
-| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=BUY_DATE) |
+| 저장 위치 | ConcurrentHashMap (힙 메모리) + `strategy.strategy_state` (type=BUY_DATE_paper / BUY_DATE_real) |
 | 적용 대상 | rsi-bollinger 전략으로 매수한 종목만 |
 | 갱신 주기 | BUY 체결 시 `recordBuy()` 호출로 오늘 날짜 저장 — 메모리 + DB 동시 저장 |
 | 재시작 복구 | `@PostConstruct initFromOrders()` → `strategy.strategy_state`에서 직접 로드 |
@@ -223,7 +232,9 @@ Map<String, LocalDate>  →  { ticker: 매수일 }
 | `boughtList`, `soldList` 카운터 | `DailySummaryCollector` | 15:25 일일 요약 후 리셋, 로그 목적 |
 | `cachedToken`, `cachedRealToken` | `KisTokenService` | 만료 시 자동 갱신 |
 | `stockNameCache` | `KisMarketApiService` | 성능 캐시, 재조회 가능 |
-| `watchTickers`, `lastBuyRanking`, `lastEvalAt` | `StrategyEngine` | 매 5분 주기 실시간 계산 |
+| `watchTickers`, `lastEvalAt` | `StrategyEngine` | 매 5분 주기 실시간 계산 |
+| `lastBuyRankingByMode` | `StrategyEngine` | `Map<String, List<...>>` (key = "paper"/"real"), 매 5분 주기 계산 |
+| `todayRunsByMode` | `StrategyEngine` | `Map<String, List<...>>` (key = "paper"/"real"), 매 5분 주기 계산 |
 | AdminConfigStore 설정 | `AdminConfigStore` | 이미 `admin-config.json`으로 파일 영속화됨 |
 
 ---
@@ -350,6 +361,7 @@ strategy-service Pod 기동
 | GET | `/api/market/stocks/{ticker}` | 종목 상세 조회 |
 | GET | `/api/market/stocks/{ticker}/candles` | 일봉 조회 |
 | GET | `/api/market/index/{code}/candles` | 지수 일봉 조회 (strategy-service 내부 전용) |
+| GET | `/internal/token?mode=paper\|real` | 모드별 KIS 토큰 조회 (내부 전용) |
 
 ### order-service (8082)
 
@@ -357,17 +369,19 @@ strategy-service Pod 기동
 |--------|------|------|
 | POST | `/api/orders/buy` | 매수 주문 |
 | POST | `/api/orders/sell` | 매도 주문 |
-| GET | `/api/orders` | 전체 주문 이력 |
+| GET | `/api/orders?mode=paper\|real` | 주문 이력 (mode 없으면 전체) |
 | GET | `/api/orders/ticker/{ticker}` | 종목별 주문 이력 |
 | POST | `/api/orders/skipped` | 스킵 신호 기록 (strategy-service 전용) |
 | GET | `/api/orders/skipped?days=N` | 최근 N일 스킵 목록 (프론트엔드용) |
+| PATCH | `/internal/trading-mode` | TradingModeStore 모드 업데이트 (내부 전용) |
 
 ### portfolio-service (8083)
 
 | Method | Path | 설명 |
 |--------|------|------|
-| GET | `/api/portfolio` | 보유 포지션 목록 |
+| GET | `/api/portfolio?mode=paper\|real` | 보유 포지션 목록 (mode 없으면 전체) |
 | GET | `/api/portfolio/balance` | 계좌 잔고 |
+| PATCH | `/internal/trading-mode` | TradingModeStore 모드 업데이트 (내부 전용) |
 
 ### strategy-service (8084)
 
@@ -377,9 +391,9 @@ strategy-service Pod 기동
 | POST | `/api/strategy/refresh-market-state` | 시장 상태 수동 갱신 |
 | POST | `/api/strategy/run` | 전략 즉시 실행 |
 | POST | `/api/strategy/test-slack` | Slack 테스트 |
-| GET | `/api/strategy/admin/status` | 관리자 설정 조회 |
-| POST | `/api/strategy/admin/pause` | 매매 중단 |
-| POST | `/api/strategy/admin/resume` | 매매 재개 |
-| PATCH | `/api/strategy/admin/config` | 투자 설정 변경 |
+| GET | `/api/strategy/admin/status` | 관리자 설정 조회 (paper/real 중첩 구조) |
+| POST | `/api/strategy/admin/pause?targetMode=paper\|real` | 매매 중단 (없으면 active 모드) |
+| POST | `/api/strategy/admin/resume?targetMode=paper\|real` | 매매 재개 (없으면 active 모드) |
+| PATCH | `/api/strategy/admin/config` | 투자 설정 변경 (tradingMode 전환 포함) |
 | GET | `/api/strategy/admin/trailing-stop-status` | 트레일링 스탑 현황 |
 | GET | `/api/strategy/admin/time-cut-status` | 타임컷 현황 |

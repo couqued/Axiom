@@ -30,6 +30,24 @@ public class OrderClient {
         return placeOrder("/api/orders/sell", request);
     }
 
+    public OrderResult sellWithRetry(OrderRequest request) {
+        OrderResult result = sell(request);
+        if (!result.success()) {
+            try {
+                log.warn("[OrderClient] 매도 실패 — 3초 후 재시도. ticker: {}", request.getTicker());
+                Thread.sleep(3_000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            result = sell(request);
+            if (!result.success()) {
+                log.warn("[OrderClient] 매도 재시도도 실패 — ticker: {}, error: {}",
+                        request.getTicker(), result.errorMsg());
+            }
+        }
+        return result;
+    }
+
     /** 전체 주문 이력 조회 (서비스 재시작 후 TimeCut buyDates 복구용) */
     public List<OrderSummaryDto> getFilledOrders() {
         try {

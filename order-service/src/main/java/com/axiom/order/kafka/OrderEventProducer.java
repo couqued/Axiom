@@ -28,9 +28,10 @@ public class OrderEventProducer {
         event.put("price", order.getPrice());
         event.put("totalAmount", order.getTotalAmount());
         event.put("filledAt", order.getFilledAt() != null ? order.getFilledAt().toString() : null);
+        event.put("tradingMode", order.getTradingMode());
 
         kafkaTemplate.send(TOPIC, order.getTicker(), event);
-        log.info("[Kafka] 주문 체결 이벤트 발행 - orderId: {}, ticker: {}, type: {}",
-                order.getId(), order.getTicker(), order.getOrderType());
+        log.info("[Kafka] 주문 체결 이벤트 발행 - orderId: {}, ticker: {}, type: {}, mode: {}",
+                order.getId(), order.getTicker(), order.getOrderType(), order.getTradingMode());
     }
 }

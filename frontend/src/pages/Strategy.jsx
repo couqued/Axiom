@@ -162,13 +162,23 @@ export default function Strategy({ liveAdminConfig }) {
 
   const isBullish = marketState === 'BULLISH'
   const activeStrategies = STRATEGIES_BY_STATE[marketState] ?? []
-  const maxPositions = adminConfig?.maxPositions ?? '-'
-  const positionRatio = adminConfig ? positions.length / adminConfig.maxPositions : 0
-  const isFull = adminConfig ? positions.length >= adminConfig.maxPositions : false
+  // adminConfig는 新構造: tradingMode, paper, real, indexDropBlockedToday, indexDropCheckedToday
+  const tradingMode = adminConfig?.tradingMode ?? 'paper'
+  const activeSettings = adminConfig ? (tradingMode === 'real' ? adminConfig.real : adminConfig.paper) : null
+  const maxPositions = activeSettings?.maxPositions ?? '-'
+  const positionRatio = activeSettings ? positions.length / activeSettings.maxPositions : 0
+  const isFull = activeSettings ? positions.length >= activeSettings.maxPositions : false
 
   return (
     <div className="page">
-      <h2>자동매매 전략</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+        <h2 style={{ margin: 0 }}>자동매매 전략</h2>
+        {adminConfig && (
+          <span className={`mode-badge ${tradingMode}`}>
+            {tradingMode === 'paper' ? '모의투자' : '운영'}
+          </span>
+        )}
+      </div>
 
       {error && <div className="error">{error}</div>}
 
@@ -361,19 +371,32 @@ export default function Strategy({ liveAdminConfig }) {
         <div className="config-grid">
           <div className="config-item">
             <span className="config-label">1회 매수금액</span>
-            <span className="config-value">{adminConfig ? adminConfig.investAmountKrw.toLocaleString() + '원' : '—'}</span>
+            <span className="config-value">{activeSettings ? activeSettings.investAmountKrw.toLocaleString() + '원' : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">최대 보유 종목</span>
-            <span className="config-value">{adminConfig ? adminConfig.maxPositions + '종목' : '—'}</span>
+            <span className="config-value">{activeSettings ? activeSettings.maxPositions + '종목' : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">트레일링 스탑</span>
-            <span className="config-value">{adminConfig ? `고점 -${adminConfig.trailingStopPct}%` : '—'}</span>
+            <span className="config-value">{activeSettings ? `고점 -${activeSettings.trailingStopPct}%` : '—'}</span>
           </div>
           <div className="config-item">
             <span className="config-label">타임 컷</span>
-            <span className="config-value">{adminConfig ? adminConfig.timeCutDays + '거래일' : '—'}</span>
+            <span className="config-value">{activeSettings ? activeSettings.timeCutDays + '거래일' : '—'}</span>
+          </div>
+          <div className="config-item">
+            <span className="config-label">지수 하락 매수차단</span>
+            <span className="config-value">
+              {activeSettings ? `${activeSettings.indexDropBlockPct}% ` : '—'}
+              {adminConfig && (
+                !adminConfig.indexDropCheckedToday
+                  ? <span className="index-drop-badge checking">체크 전</span>
+                  : adminConfig.indexDropBlockedToday
+                    ? <span className="index-drop-badge blocked">차단</span>
+                    : <span className="index-drop-badge ok">미차단</span>
+              )}
+            </span>
           </div>
           <div className="config-item">
             <span className="config-label">감시 유니버스</span>
