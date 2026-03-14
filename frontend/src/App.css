@@ -1160,3 +1160,68 @@ body {
 .index-drop-status.blocked, .index-drop-badge.blocked { color: #ef4444; }
 .index-drop-status.ok,      .index-drop-badge.ok      { color: #22c55e; }
 .index-drop-status.checking,.index-drop-badge.checking { color: #f59e0b; }
+
+/* ── 시간별 실행 이력 ─────────────────────────────────────────────────── */
+
+.run-history-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.run-history-card h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #ccc;
+}
+
+.rh-list { display: flex; flex-direction: column; gap: 6px; }
+
+.rh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #111128;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.rh-time {
+  font-size: 13px;
+  font-weight: 600;
+  color: #9aa0c4;
+  min-width: 42px;
+  letter-spacing: 0.5px;
+}
+
+.rh-stats { display: flex; gap: 4px; }
+.rh-trade { display: flex; gap: 4px; }
+.rh-detail { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+
+.rh-pill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.rh-pill-run  { background: #1e2038; color: #8888cc; border: 1px solid #3a3a6a; }
+.rh-pill-eval { background: #1e2038; color: #8888cc; border: 1px solid #3a3a6a; }
+.rh-pill-buy  { background: #2d1414; color: #ff8080; border: 1px solid #6e1d1d; }
+.rh-pill-sell { background: #0d1a2d; color: #7dccff; border: 1px solid #1a3d6e; }
+.rh-pill-none { background: #1a1a2e; color: #444466; border: 1px solid #2a2a4a; }
+
+.rh-tag {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.rh-tag-buy   { background: #0a1f12; color: #7dffaa; border: 1px solid #1d6e3a; }
+.rh-tag-skip  { background: #1f1a09; color: #ffd966; border: 1px solid #7a6419; }
+.rh-tag-empty { background: #1a1a2e; color: #555577; border: 1px solid #2a2a4a; }

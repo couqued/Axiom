@@ -18,7 +18,8 @@
 10. [설정 방법](#10-설정-방법)
 11. [포지션 사이징](#11-포지션-사이징)
 12. [종목 선정 우선순위 점수화 \[계획\]](#12-종목-선정-우선순위-점수화-계획)
-13. [하락장(BEARISH) 전략 \[계획\]](#13-하락장bearish-전략-계획)
+13. [매수 신호 근접도 (Signal Gap)](#13-매수-신호-근접도-signal-gap)
+14. [하락장(BEARISH) 전략 \[계획\]](#14-하락장bearish-전략-계획)
 
 ---
 
@@ -840,7 +841,116 @@ Phase 2 — BUY 실행:
 
 ---
 
-## 13. 하락장(BEARISH) 전략 [계획]
+## 13. 매수 신호 근접도 (Signal Gap)
+
+### 개요
+
+감시 중인 전 종목(코스피200+코스닥150)에 대해 **현재 상태에서 매수 신호까지 얼마나 남았는지**를 % 단위로 계산하고, 가장 가까운 N개를 반환하는 분석 기능입니다.
+
+장중에 어떤 종목이 매수 신호에 근접해 있는지 확인하거나, 전략이 실행되지 않는 원인을 진단하는 데 활용합니다.
+
+### 동작 방식
+
+350개 종목을 순회하며 종목당 API 호출이 필요하므로 **비동기 캐시 패턴**으로 구현합니다.
+
+```
+POST /api/strategy/signal-gap/refresh
+  → 즉시 {"result": "계산 시작"} 반환
+  → 백그라운드(CompletableFuture.runAsync)에서 전 종목 순회
+    각 종목: getCurrentPrice() + getCandles() + 라이브캔들 생성 + gap 계산 + 200ms sleep
+    ≈ 350개 × 200ms = 약 70초 소요
+  → 완료 시 signalGapCache 갱신 + signalGapComputedAt 타임스탬프 기록
+
+GET /api/strategy/signal-gap
+  → 캐시 즉시 반환: { items, computedAt, running }
+```
+
+### 전략별 gap 계산
+
+| 시장 상태 | 전략 | 계산 대상 | gapPct 의미 |
+|-----------|------|-----------|------------|
+| BULLISH | 변동성 돌파 | 목표가 | `(목표가 - 현재가) / 현재가 × 100` — 양수: 상승 필요, 음수: 조건 충족 |
+| BULLISH | 골든크로스 | MA20 | `(MA20 - MA5) / MA20 × 100` — 양수: 크로스 임박, 음수: MA5 ≥ MA20 |
+| SIDEWAYS | RSI+볼린저 | 하단밴드 | `(현재가 - 하단밴드) / 현재가 × 100` — 양수: 하락 필요, 음수: 조건 충족 |
+
+```
+변동성 돌파 gap:
+  목표가 = 오늘시가 + (전일고가 - 전일저가) × 0.5
+  gapPct = (목표가 - 현재가) / 현재가 × 100
+
+골든크로스 gap:
+  MA5  = 최근 5개 종가 평균 (라이브캔들 포함)
+  MA20 = 최근 20개 종가 평균 (라이브캔들 포함)
+  gapPct = (MA20 - MA5) / MA20 × 100
+  → gapPct > 0: 크로스 임박 (값이 작을수록 근접)
+  → gapPct ≤ 0: MA5 ≥ MA20 — 오늘 처음 크로스라면 다음 5분 사이클에서 BUY 신호
+
+RSI+볼린저 gap:
+  하단밴드 = MA20 - 2σ  (최근 20일 기준)
+  RSI(14)  = Wilder's Smoothed RSI
+  gapPct   = (현재가 - 하단밴드) / 현재가 × 100
+```
+
+> **골든크로스 주의**: gapPct ≤ 0은 "MA5 ≥ MA20" 상태를 의미할 뿐, BUY 신호가 보장되지는 않습니다.
+> 실제 BUY 조건은 `전일 MA5 ≤ MA20 AND 당일 MA5 > MA20` (오늘 처음 크로스)이므로,
+> 이미 며칠 전 크로스된 종목은 gapPct ≤ 0이더라도 HOLD입니다.
+
+결과는 전략별 구분 없이 `gapPct` 오름차순 전체 정렬 후 상위 N개 반환. BULLISH 시 변동성 돌파 + 골든크로스가 섞여 표시됩니다.
+
+### API
+
+```bash
+# 백그라운드 계산 시작
+POST http://localhost:8084/api/strategy/signal-gap/refresh?top=10
+→ {"result": "계산 시작"}   # 이미 실행 중이면 {"result": "계산 중"}
+
+# 캐시 조회 (running=true이면 아직 계산 중)
+GET http://localhost:8084/api/strategy/signal-gap
+→ {
+    "running": false,
+    "computedAt": "2026-03-14T10:30:00",
+    "items": [
+      {
+        "rank": 1,
+        "ticker": "005930",
+        "stockName": "삼성전자",
+        "strategy": "volatility-breakout",
+        "currentPrice": 74800,
+        "threshold": 75300,
+        "gapPct": 0.67,
+        "rsi": -1,
+        "detail": "목표가=75300, 현재=74800, Range=2100"
+      },
+      ...
+    ]
+  }
+```
+
+### 관련 클래스
+
+| 클래스/파일 | 역할 |
+|------------|------|
+| `StrategyEngine.triggerSignalGapRefresh(int topN)` | 비동기 계산 시작 (중복 실행 방지) |
+| `StrategyEngine.calcSignalGapsInternal(int topN)` | 실제 gap 계산 로직 (private) — BULLISH 시 변동성 돌파 + 골든크로스 동시 계산 |
+| `StrategyEngine.calcGoldenCrossGap()` | MA5/MA20 이격률 계산 (private) |
+| `StrategyEngine.calcVolBreakoutGap()` | 변동성 돌파 목표가까지 gap 계산 (private) |
+| `StrategyEngine.calcRsiBollingerGap()` | RSI+볼린저 하단밴드까지 gap 계산 (private) |
+| `StrategyController GET /signal-gap` | 캐시 즉시 반환 |
+| `StrategyController POST /signal-gap/refresh` | 계산 트리거 |
+| `SignalGapDto` | `rank, ticker, stockName, strategy, currentPrice, threshold, gapPct, rsi, detail` |
+
+### 프론트엔드 연동
+
+Strategy 페이지 "매수 신호 근접도" 섹션:
+- "조회" 버튼 클릭 → `POST /signal-gap/refresh` → 3초 간격 폴링 → `running=false` 시 테이블 표시
+- `computedAt` 타임스탬프 표시 (마지막 계산 기준)
+- `gapPct ≤ 0`: "조건 충족" (녹색)
+- BULLISH: `gapPct > 0` → "X% 상승 필요" (파란색)
+- SIDEWAYS: `gapPct > 0` → "X% 하락 필요" (빨간색)
+
+---
+
+## 14. 하락장(BEARISH) 전략 [계획]
 
 ### 현재 문제
 

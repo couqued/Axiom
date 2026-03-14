@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
@@ -103,6 +104,25 @@ public class StrategyController {
         body.put("date", LocalDate.now(TradingCalendar.KST).toString());
         body.put("hours", hours);
         return ResponseEntity.ok(body);
+    }
+
+    /** 매수 신호까지의 근접도 — 캐시 즉시 반환 */
+    @GetMapping("/signal-gap")
+    public ResponseEntity<Map<String, Object>> getSignalGap() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("items", strategyEngine.getSignalGapCache());
+        body.put("computedAt", strategyEngine.getSignalGapComputedAt());
+        body.put("running", strategyEngine.isSignalGapRunning());
+        return ResponseEntity.ok(body);
+    }
+
+    /** 매수 신호 근접도 백그라운드 계산 트리거 */
+    @PostMapping("/signal-gap/refresh")
+    public ResponseEntity<Map<String, Object>> refreshSignalGap(
+            @RequestParam(defaultValue = "10") int top) {
+        strategyEngine.triggerSignalGapRefresh(top);
+        boolean alreadyRunning = strategyEngine.isSignalGapRunning();
+        return ResponseEntity.ok(Map.of("result", alreadyRunning ? "계산 중" : "계산 시작"));
     }
 
     /** 마지막 전략 실행 BUY 랭킹 조회 (score 내림차순 상위 30개) */

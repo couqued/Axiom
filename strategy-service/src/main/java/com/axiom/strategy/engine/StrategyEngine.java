@@ -10,6 +10,7 @@ import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.SignalDto;
+import com.axiom.strategy.dto.SignalGapDto;
 import com.axiom.strategy.dto.SkippedSignalRequest;
 import com.axiom.strategy.dto.StockPriceDto;
 import com.axiom.strategy.notification.SlackNotifier;
@@ -33,6 +34,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -52,6 +54,9 @@ public class StrategyEngine {
     private final List<TradingStrategy> strategies;
 
     private volatile List<String> watchTickers = List.of();
+    private volatile List<SignalGapDto> signalGapCache = List.of();
+    private volatile LocalDateTime signalGapComputedAt = null;
+    private volatile boolean signalGapRunning = false;
     /** 모드별 마지막 BUY 랭킹: "paper"|"real" → List<EvalRankEntry> */
     private final Map<String, List<EvalRankEntry>> lastBuyRankingByMode = new ConcurrentHashMap<>();
     private volatile LocalDateTime lastEvalAt;
@@ -449,5 +454,159 @@ public class StrategyEngine {
                 .marketState(marketState.name())
                 .skipReason(skipReason)
                 .build());
+    }
+
+    // ── Signal Gap 조회 ───────────────────────────────────────────────────────
+
+    public void triggerSignalGapRefresh(int topN) {
+        if (signalGapRunning) return;
+        signalGapRunning = true;
+        CompletableFuture.runAsync(() -> {
+            try {
+                signalGapCache = calcSignalGapsInternal(topN);
+                signalGapComputedAt = LocalDateTime.now(TradingCalendar.KST);
+            } catch (Exception e) {
+                log.error("[SignalGap] 계산 오류: {}", e.getMessage());
+            } finally {
+                signalGapRunning = false;
+            }
+        });
+    }
+
+    public List<SignalGapDto> getSignalGapCache()  { return signalGapCache; }
+    public LocalDateTime getSignalGapComputedAt()  { return signalGapComputedAt; }
+    public boolean isSignalGapRunning()            { return signalGapRunning; }
+
+    private List<SignalGapDto> calcSignalGapsInternal(int topN) {
+        MarketState state = marketStateService.getCurrentState();
+        int candleDays = strategyConfig.getCandleDays();
+        List<SignalGapDto> gaps = new ArrayList<>();
+
+        for (String ticker : watchTickers) {
+            try {
+                StockPriceDto price = marketClient.getCurrentPrice(ticker);
+                if (price == null || price.getCurrentPrice() == null) continue;
+
+                List<CandleDto> candles = marketClient.getCandles(ticker, candleDays);
+                if (candles == null || candles.isEmpty()) continue;
+
+                CandleDto liveCandle = CandleDto.builder()
+                        .tradeDate(LocalDate.now(TradingCalendar.KST))
+                        .openPrice(price.getOpenPrice())
+                        .highPrice(price.getHighPrice())
+                        .lowPrice(price.getLowPrice())
+                        .closePrice(price.getCurrentPrice())
+                        .volume(price.getVolume())
+                        .build();
+                List<CandleDto> all = new ArrayList<>(candles);
+                all.add(liveCandle);
+
+                if (state == MarketState.SIDEWAYS) {
+                    SignalGapDto gap = calcRsiBollingerGap(ticker, price.getStockName(), all);
+                    if (gap != null) gaps.add(gap);
+                } else {
+                    SignalGapDto volGap = calcVolBreakoutGap(ticker, price.getStockName(), all);
+                    if (volGap != null) gaps.add(volGap);
+                    SignalGapDto gcGap = calcGoldenCrossGap(ticker, price.getStockName(), all);
+                    if (gcGap != null) gaps.add(gcGap);
+                }
+                Thread.sleep(200);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                log.warn("[SignalGap] {} 처리 오류: {}", ticker, e.getMessage());
+            }
+        }
+
+        gaps.sort(Comparator.comparingDouble(SignalGapDto::gapPct));
+        List<SignalGapDto> result = new ArrayList<>();
+        for (int i = 0; i < Math.min(topN, gaps.size()); i++) {
+            SignalGapDto g = gaps.get(i);
+            result.add(new SignalGapDto(i + 1, g.ticker(), g.stockName(), g.strategy(),
+                    g.currentPrice(), g.threshold(), g.gapPct(), g.rsi(), g.detail()));
+        }
+        return result;
+    }
+
+    private SignalGapDto calcRsiBollingerGap(String ticker, String stockName, List<CandleDto> candles) {
+        if (candles.size() < 21) return null; // BB_PERIOD(20) + 라이브
+        int endIdx = candles.size() - 1;
+        double currentPrice = candles.get(endIdx).getClosePrice().doubleValue();
+
+        // 볼린저밴드 하단 계산 (BB_PERIOD=20, 2σ)
+        int bbStart = endIdx - 20 + 1;
+        double sum = 0;
+        for (int i = bbStart; i <= endIdx; i++) sum += candles.get(i).getClosePrice().doubleValue();
+        double middle = sum / 20;
+        double variance = 0;
+        for (int i = bbStart; i <= endIdx; i++) {
+            double diff = candles.get(i).getClosePrice().doubleValue() - middle;
+            variance += diff * diff;
+        }
+        double stdDev = Math.sqrt(variance / 20);
+        double lowerBand = middle - 2.0 * stdDev;
+
+        // RSI(14) 계산
+        double rsi = calcRsiForGap(candles, endIdx);
+
+        double gapPct = (currentPrice - lowerBand) / currentPrice * 100;
+        String detail = String.format("RSI=%.1f, 하단밴드=%.0f, 현재=%.0f", rsi, lowerBand, currentPrice);
+        return new SignalGapDto(0, ticker, stockName, "rsi-bollinger",
+                currentPrice, lowerBand, gapPct, rsi, detail);
+    }
+
+    private SignalGapDto calcGoldenCrossGap(String ticker, String stockName, List<CandleDto> candles) {
+        if (candles.size() < 21) return null;
+        int endIdx = candles.size() - 1;
+
+        double ma5Sum = 0, ma20Sum = 0;
+        for (int i = endIdx - 4; i <= endIdx; i++)
+            ma5Sum += candles.get(i).getClosePrice().doubleValue();
+        for (int i = endIdx - 19; i <= endIdx; i++)
+            ma20Sum += candles.get(i).getClosePrice().doubleValue();
+        double ma5  = ma5Sum / 5;
+        double ma20 = ma20Sum / 20;
+
+        double gapPct = (ma20 - ma5) / ma20 * 100;
+        double currentPrice = candles.get(endIdx).getClosePrice().doubleValue();
+        String detail = String.format("MA5=%.0f, MA20=%.0f, 이격=%.2f%%", ma5, ma20, gapPct);
+        return new SignalGapDto(0, ticker, stockName, "golden-cross",
+                currentPrice, ma20, gapPct, -1, detail);
+    }
+
+    private SignalGapDto calcVolBreakoutGap(String ticker, String stockName, List<CandleDto> candles) {
+        if (candles.size() < 2) return null;
+        CandleDto today     = candles.get(candles.size() - 1);
+        CandleDto yesterday = candles.get(candles.size() - 2);
+
+        double range       = yesterday.getHighPrice().subtract(yesterday.getLowPrice()).doubleValue();
+        double targetPrice = today.getOpenPrice().doubleValue() + range * 0.5;
+        double currentPrice = today.getClosePrice().doubleValue();
+
+        double gapPct = (targetPrice - currentPrice) / currentPrice * 100;
+        String detail = String.format("목표가=%.0f, 현재=%.0f, Range=%.0f", targetPrice, currentPrice, range);
+        return new SignalGapDto(0, ticker, stockName, "volatility-breakout",
+                currentPrice, targetPrice, gapPct, -1, detail);
+    }
+
+    /** Wilder's Smoothed RSI(14) — StrategyEngine 내부용 */
+    private double calcRsiForGap(List<CandleDto> candles, int endIndex) {
+        int rsiPeriod = 14;
+        int start = endIndex - rsiPeriod;
+        if (start < 0) return 50.0;
+
+        double avgGain = 0, avgLoss = 0;
+        for (int i = start + 1; i <= start + rsiPeriod; i++) {
+            double change = candles.get(i).getClosePrice()
+                    .subtract(candles.get(i - 1).getClosePrice()).doubleValue();
+            if (change > 0) avgGain += change;
+            else avgLoss += Math.abs(change);
+        }
+        avgGain /= rsiPeriod;
+        avgLoss /= rsiPeriod;
+        if (avgLoss == 0) return 100.0;
+        double rs = avgGain / avgLoss;
+        return 100.0 - (100.0 / (1.0 + rs));
     }
 }

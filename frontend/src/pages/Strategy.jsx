@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getMarketState, refreshMarketState, runStrategy, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getRunHistory } from '../api/stockApi'
+import { getMarketState, refreshMarketState, runStrategy, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getRunHistory, getSignalGap, triggerSignalGapRefresh } from '../api/stockApi'
 
 const STRATEGY_KO = {
   'golden-cross': '골든크로스',
@@ -41,6 +41,9 @@ export default function Strategy({ liveAdminConfig }) {
   const [error, setError] = useState(null)
 
   const [runHistory, setRunHistory] = useState(null)
+  const [signalGap, setSignalGap] = useState([])
+  const [signalGapComputedAt, setSignalGapComputedAt] = useState(null)
+  const [signalGapLoading, setSignalGapLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [running, setRunning] = useState(false)
   const [runMsg, setRunMsg] = useState(null)
@@ -54,6 +57,31 @@ export default function Strategy({ liveAdminConfig }) {
   const loadRunHistory = useCallback(async () => {
     const data = await getRunHistory().catch(() => null)
     if (data) setRunHistory(data)
+  }, [])
+
+  const loadSignalGap = useCallback(async () => {
+    setSignalGapLoading(true)
+    setError(null)
+    try {
+      await triggerSignalGapRefresh(10)
+      const poll = setInterval(async () => {
+        try {
+          const data = await getSignalGap()
+          if (!data.running) {
+            setSignalGap(data.items || [])
+            setSignalGapComputedAt(data.computedAt || null)
+            setSignalGapLoading(false)
+            clearInterval(poll)
+          }
+        } catch {
+          setSignalGapLoading(false)
+          clearInterval(poll)
+        }
+      }, 3000)
+    } catch (e) {
+      setError('signal gap 조회 실패: ' + e.message)
+      setSignalGapLoading(false)
+    }
   }, [])
 
   useEffect(() => {
@@ -297,37 +325,105 @@ export default function Strategy({ liveAdminConfig }) {
       {runHistory?.hours?.length > 0 && (
         <div className="run-history-card">
           <h3>시간별 실행 이력 <span className="section-sub">당일 · 서버 재시작 시 초기화</span></h3>
-          <table className="run-history-table">
-            <thead>
-              <tr><th>시간대</th><th>실행</th><th>평가</th><th>매수</th><th>매도</th><th>주요 내용</th></tr>
-            </thead>
-            <tbody>
-              {runHistory.hours.map(h => (
-                <tr key={h.hour}>
-                  <td>{String(h.hour).padStart(2, '0')}:xx</td>
-                  <td>{h.runCount}회</td>
-                  <td>{h.evaluated}개</td>
-                  <td className={h.bought > 0 ? 'up' : ''}>{h.bought}건</td>
-                  <td className={h.sold > 0 ? 'down' : ''}>{h.sold}건</td>
-                  <td className="run-history-detail">
-                    {h.boughtTickers?.length > 0 && (
-                      <span className="up">{h.boughtTickers.join(', ')}</span>
-                    )}
-                    {h.skippedList?.length > 0 && (
-                      <span className="skip-hint">
-                        {h.skippedList.map(s => s.stockName).join(', ')} 스킵
-                      </span>
-                    )}
-                    {h.noSignalCount === h.runCount && h.bought === 0 && (
-                      <span className="empty-hint">BUY 신호 없음</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="rh-list">
+            {runHistory.hours.map(h => (
+              <div key={h.hour} className="rh-row">
+                <span className="rh-time">{String(h.hour).padStart(2, '0')}:xx</span>
+                <div className="rh-stats">
+                  <span className="rh-pill rh-pill-run">{h.runCount}회</span>
+                  <span className="rh-pill rh-pill-eval">{h.evaluated}종목</span>
+                </div>
+                <div className="rh-trade">
+                  {h.bought > 0
+                    ? <span className="rh-pill rh-pill-buy">매수 {h.bought}</span>
+                    : <span className="rh-pill rh-pill-none">매수 -</span>
+                  }
+                  {h.sold > 0 && <span className="rh-pill rh-pill-sell">매도 {h.sold}</span>}
+                </div>
+                <div className="rh-detail">
+                  {h.boughtTickers?.map(t => (
+                    <span key={t} className="rh-tag rh-tag-buy">{t}</span>
+                  ))}
+                  {h.skippedList?.map(s => (
+                    <span key={s.stockName} className="rh-tag rh-tag-skip">{s.stockName} 스킵</span>
+                  ))}
+                  {h.noSignalCount === h.runCount && h.bought === 0 && (
+                    <span className="rh-tag rh-tag-empty">신호 없음</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+
+      {/* 매수 신호 근접도 */}
+      <div className="skipped-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <h3>매수 신호 근접도 <span className="section-sub">조건까지 필요한 변화% 상위 10개</span></h3>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+            {signalGapComputedAt && (
+              <span className="section-note" style={{ margin: 0 }}>
+                {new Date(signalGapComputedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준
+              </span>
+            )}
+            <button className="refresh-btn small" onClick={loadSignalGap} disabled={signalGapLoading}>
+              {signalGapLoading ? '조회 중...' : '조회'}
+            </button>
+          </div>
+        </div>
+        {signalGap.length === 0 ? (
+          <p className="empty small">조회 버튼을 눌러 근접도를 확인하세요 (전 종목 순회로 1~2분 소요)</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #ddd', textAlign: 'left' }}>
+                  <th style={{ padding: '6px 8px' }}>순위</th>
+                  <th style={{ padding: '6px 8px' }}>종목명</th>
+                  <th style={{ padding: '6px 8px' }}>전략</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>현재가</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>임계가</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>필요 변화</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>RSI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signalGap.map(item => {
+                  const met = item.gapPct <= 0
+                  const isSideways = item.strategy === 'rsi-bollinger'
+                  return (
+                    <tr key={item.ticker} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                      <td style={{ padding: '6px 8px', color: '#7f8c8d' }}>#{item.rank}</td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <div style={{ fontWeight: 600 }}>{item.stockName || item.ticker}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#95a5a6' }}>{item.ticker}</div>
+                      </td>
+                      <td style={{ padding: '6px 8px', color: '#7f8c8d' }}>
+                        {STRATEGY_KO[item.strategy] ?? item.strategy}
+                      </td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(item.currentPrice)}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{item.threshold != null ? Math.round(item.threshold).toLocaleString('ko-KR') : '—'}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                        {met ? (
+                          <span style={{ color: '#27ae60', fontWeight: 700 }}>조건 충족</span>
+                        ) : isSideways ? (
+                          <span style={{ color: '#e74c3c' }}>{item.gapPct.toFixed(2)}% 하락 필요</span>
+                        ) : (
+                          <span style={{ color: '#2980b9' }}>{item.gapPct.toFixed(2)}% 상승 필요</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', color: item.rsi >= 0 && item.rsi <= 30 ? '#e74c3c' : '#555' }}>
+                        {item.rsi >= 0 ? item.rsi.toFixed(1) : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* BUY 신호 랭킹 */}
       <div className="skipped-card">

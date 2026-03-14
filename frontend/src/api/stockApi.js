@@ -87,3 +87,10 @@ export const getEvalRanking = () => request('/api/strategy/eval-ranking')
 
 // 당일 시간별 전략 실행 이력
 export const getRunHistory = () => request('/api/strategy/run-history')
+
+// 매수 신호 근접도 캐시 조회 ({items, computedAt, running})
+export const getSignalGap = () => request('/api/strategy/signal-gap')
+
+// 매수 신호 근접도 백그라운드 계산 트리거
+export const triggerSignalGapRefresh = (top = 10) =>
+  request(`/api/strategy/signal-gap/refresh?top=${top}`, { method: 'POST' })
