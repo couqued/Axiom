@@ -18,8 +18,29 @@ public class StrategyStateStore {
     private static final String PEAK_PRICE   = "PEAK_PRICE";
     private static final String BUY_DATE     = "BUY_DATE";
     private static final String TODAY_BOUGHT = "TODAY_BOUGHT";
+    private static final String BUY_STAGE    = "BUY_STAGE";
 
     private final StrategyStateRepository repo;
+
+    // ── BUY_STAGE ───────────────────────────────────────────────────────────
+
+    @Transactional
+    public void saveBuyStage(String ticker, int stage, String tradingMode) {
+        upsert(stageType(tradingMode), ticker, String.valueOf(stage));
+    }
+
+    @Transactional
+    public void removeBuyStage(String ticker, String tradingMode) {
+        repo.deleteByTypeAndTicker(stageType(tradingMode), ticker);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Integer> loadAllBuyStages(String tradingMode) {
+        return repo.findAllByType(stageType(tradingMode)).stream()
+                .collect(Collectors.toMap(
+                        StrategyState::getTicker,
+                        s -> Integer.parseInt(s.getValue())));
+    }
 
     // ── PEAK_PRICE ──────────────────────────────────────────────────────────
 
@@ -90,6 +111,10 @@ public class StrategyStateStore {
 
     private String buyType(String tradingMode) {
         return BUY_DATE + "_" + (tradingMode != null ? tradingMode : "paper");
+    }
+
+    private String stageType(String tradingMode) {
+        return BUY_STAGE + "_" + (tradingMode != null ? tradingMode : "paper");
     }
 
     private void upsert(String type, String ticker, String value) {

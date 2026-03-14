@@ -151,7 +151,17 @@ public class MarketStateService {
         this.indexDropCheckedToday = false;
         this.indexDropCheckDate    = null;
 
-        MarketState newState = lastClose.compareTo(ma) > 0 ? MarketState.BULLISH : MarketState.SIDEWAYS;
+        BigDecimal bearishThreshold = ma.multiply(BigDecimal.valueOf(0.97));
+
+        MarketState newState;
+        if (lastClose.compareTo(ma) > 0) {
+            newState = MarketState.BULLISH;
+        } else if (lastClose.compareTo(bearishThreshold) < 0) {
+            newState = MarketState.BEARISH;
+        } else {
+            newState = MarketState.SIDEWAYS;
+        }
+
         MarketState oldState = currentState.getAndSet(newState);
 
         log.info("[MarketState] 판별 완료 — indexCode: {}, 종가: {}, MA{}: {}, 상태: {}",

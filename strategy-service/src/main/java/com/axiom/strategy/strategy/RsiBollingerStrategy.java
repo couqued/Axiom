@@ -60,33 +60,51 @@ public class RsiBollingerStrategy implements TradingStrategy {
         log.debug("[RsiBollinger] {} | RSI: {} | 현재가: {} | 하단: {} | 중심: {} | 상단: {}",
                 ticker, String.format("%.1f", rsi), currentPrice, bb.lower, bb.middle, bb.upper);
 
-        // 매수: RSI 과매도 AND 볼린저 하단밴드 이탈
-        if (rsi < RSI_OVERSOLD && currentPrice.compareTo(bb.lower) < 0) {
-            // score: RSI 과매도 깊이(0~50) + 밴드 이탈 깊이(0~50)
-            double rsiScore = Math.min((RSI_OVERSOLD - rsi) / RSI_OVERSOLD, 1.0) * 50;
-            double bandGapPct = bb.lower.subtract(currentPrice)
-                    .divide(bb.lower, 6, RoundingMode.HALF_UP)
-                    .doubleValue() * 100;
-            double bandScore = Math.min(bandGapPct / 5.0, 1.0) * 50; // cap: 하단밴드 5% 이탈 = 50점
-            double score = rsiScore + bandScore;
+        // ── BUY 조건 (Scoring) ──
+        // 1차 타점: 볼린저 하단 이탈
+        boolean isBbBroken = currentPrice.compareTo(bb.lower) < 0;
+        // 2차 타점: RSI 과매도 (30 미만)
+        boolean isRsiOversold = rsi < RSI_OVERSOLD;
+
+        if (isBbBroken || isRsiOversold) {
+            // score: 볼린저 하단 이탈 깊이(0~50) + RSI 과매도 깊이(0~50)
+            double bbScore = 0;
+            if (isBbBroken) {
+                double bandGapPct = bb.lower.subtract(currentPrice)
+                        .divide(bb.lower, 6, RoundingMode.HALF_UP)
+                        .doubleValue() * 100;
+                bbScore = Math.min(bandGapPct / 5.0, 1.0) * 50; // 하단밴드 5% 이탈 시 50점
+            }
+
+            double rsiScore = 0;
+            if (isRsiOversold) {
+                rsiScore = Math.min((RSI_OVERSOLD - rsi) / RSI_OVERSOLD, 1.0) * 50;
+            }
+
+            double totalScore = bbScore + rsiScore;
+            // BB만 이탈 시 1단계, RSI까지 도달 시 2단계(완료)
+            int stage = (isBbBroken && isRsiOversold) ? 2 : (isBbBroken ? 1 : 2); 
+            // RSI 단독 과매도도 2단계(강력)로 취급 (보통 BB가 먼저 터지므로 드문 케이스)
 
             return SignalDto.builder()
                     .action(SignalDto.Action.BUY)
                     .ticker(ticker)
                     .price(currentPrice)
                     .strategyName(getName())
-                    .score(score)
-                    .reason(String.format("과매도 진입 — RSI(%.1f) < %.0f & 종가(%.0f) < 하단밴드(%.0f) [score=%.1f]",
-                            rsi, RSI_OVERSOLD, currentPrice.doubleValue(), bb.lower.doubleValue(), score))
+                    .score(totalScore)
+                    .buyStage(stage)
+                    .reason(String.format("%s 진입 [RSI=%.1f, BB하단=%.0f, score=%.1f]",
+                            stage == 1 ? "BB 1차" : "BB+RSI 완료", rsi, bb.lower.doubleValue(), totalScore))
                     .signalAt(LocalDateTime.now())
                     .build();
         }
 
-        // 매도: RSI 과매수 OR 볼린저 중심선(MA20) 도달 (평균 회귀 완료)
-        if (rsi > RSI_OVERBOUGHT || currentPrice.compareTo(bb.middle) >= 0) {
+        // ── SELL 조건 (OR) ──
+        // 기존 중심선(middle)에서 상단선(upper)으로 목표가 상향
+        if (rsi > RSI_OVERBOUGHT || currentPrice.compareTo(bb.upper) >= 0) {
             String reason = rsi > RSI_OVERBOUGHT
                     ? String.format("과매수 청산 — RSI(%.1f) > %.0f", rsi, RSI_OVERBOUGHT)
-                    : String.format("평균 회귀 청산 — 종가(%.0f) ≥ 중심선(%.0f)", currentPrice.doubleValue(), bb.middle.doubleValue());
+                    : String.format("상단선 도달 익절 — 종가(%.0f) ≥ 상단밴드(%.0f)", currentPrice.doubleValue(), bb.upper.doubleValue());
             return SignalDto.builder()
                     .action(SignalDto.Action.SELL)
                     .ticker(ticker)

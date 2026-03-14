@@ -6,6 +6,7 @@ import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.StockPriceDto;
 import com.axiom.strategy.service.TrailingStopService;
+import com.axiom.strategy.persistence.StrategyStateStore;
 import com.axiom.strategy.util.TradingCalendar;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ public class TrailingStopScheduler {
     private final PortfolioClient portfolioClient;
     private final MarketClient marketClient;
     private final TrailingStopService trailingStopService;
+    private final StrategyStateStore strategyStateStore;
 
     /**
      * 평일 09:00 ~ 15:20 사이 1분마다 보유 종목 트레일링 스탑 체크.
@@ -51,6 +53,14 @@ public class TrailingStopScheduler {
 
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
         if (positions.isEmpty()) return;
+
+        // V2: 매수 단계 정보 복구 (트레일링 스탑 보류 로직용)
+        String tradingMode = adminConfigStore.getTradingMode();
+        java.util.Map<String, Integer> stages = strategyStateStore.loadAllBuyStages(tradingMode);
+        positions.forEach(p -> {
+            Integer s = stages.get(p.getTicker());
+            if (s != null) p.withBuyStage(s);
+        });
 
         log.debug("[TrailingStopScheduler] 체크 시작 — 보유 {}개", positions.size());
 

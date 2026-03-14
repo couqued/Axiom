@@ -34,6 +34,10 @@ export const getOrders = (mode) =>
 export const getPortfolio = (mode) =>
   request(mode ? `/api/portfolio?mode=${mode}` : '/api/portfolio')
 
+// 전략 메타데이터가 포함된 포트폴리오 (buyStage 등)
+export const getEnrichedPortfolio = () =>
+  request('/api/strategy/portfolio')
+
 // 계좌 잔고
 export const getBalance = () => request('/api/portfolio/balance')
 

@@ -1,242 +1,152 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getPortfolio, getBalance, getStockPrice, getTrailingStopStatus, getTimeCutStatus, getOrders } from '../api/stockApi'
-
-const isMarketOpen = () => {
-  const now = new Date()
-  const day = now.getDay() // 0=일, 6=토
-  if (day === 0 || day === 6) return false
-  const hour = now.getHours()
-  const min = now.getMinutes()
-  const totalMin = hour * 60 + min
-  return totalMin >= 9 * 60 && totalMin < 15 * 60 + 30 // 09:00~15:30
-}
+import { getEnrichedPortfolio, getBalance, getTrailingStopStatus, getTimeCutStatus, getStockPrice } from '../api/stockApi'
 
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState([])
-  const [balance, setBalance] = useState(null)
-  const [prices, setPrices] = useState({})         // { ticker: currentPrice }
-  const [stockNames, setStockNames] = useState({}) // { ticker: stockName } — market-service 기준
-  const [tsStatus, setTsStatus] = useState({})     // { ticker: { peakPrice, stopPrice } }
-  const [tcStatus, setTcStatus] = useState({})     // { ticker: { buyDate, elapsed, remaining } }
-  const [buyInfo, setBuyInfo] = useState({})        // { ticker: { strategyName, marketState } }
+  const [balance, setBalance] = useState({ totalAsset: 0, cash: 0, totalPnl: 0, totalPnlRate: 0 })
+  const [tsStatus, setTsStatus] = useState({})
+  const [tcStatus, setTcStatus] = useState({})
+  const [prices, setPositionsPrices] = useState({})
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [lastRefreshed, setLastRefreshed] = useState(null)
 
-  const STRATEGY_LABEL = {
-    'volatility-breakout': '변동성 돌파',
-    'golden-cross': '골든크로스',
-    'rsi-bollinger': 'RSI+볼린저',
-  }
-  const MARKET_LABEL = { BULLISH: '상승장', SIDEWAYS: '횡보장' }
-
-  useEffect(() => {
-    setLoading(true)
-    Promise.all([
-      getPortfolio(),
-      getBalance(),
-      getTrailingStopStatus().catch(() => ({})),  // 실패해도 빈 객체로 처리
-      getTimeCutStatus().catch(() => ({})),        // 실패해도 빈 객체로 처리
-      getOrders().catch(() => []),                 // 매수 전략/시장상태 조회용
-    ])
-      .then(([p, b, ts, tc, orders]) => {
-        setPortfolio(p)
-        setBalance(b)
-        setTsStatus(ts)
-        setTcStatus(tc)
-        // 보유 종목별 가장 최근 FILLED BUY 주문에서 전략명/시장상태 추출
-        const info = {}
-        p.forEach(item => {
-          const buyOrder = orders
-            .filter(o => o.ticker === item.ticker && o.orderType === 'BUY' && o.status === 'FILLED')
-            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]
-          if (buyOrder) info[item.ticker] = { strategyName: buyOrder.strategyName, marketState: buyOrder.marketState }
-        })
-        setBuyInfo(info)
-        // 보유 종목별 현재가 병렬 조회
-        if (p.length > 0) {
-          return Promise.all(p.map(item => getStockPrice(item.ticker).catch(() => null)))
-            .then(priceResults => {
-              const priceMap = {}
-              const nameMap = {}
-              p.forEach((item, i) => {
-                const pd = priceResults[i]
-                if (pd?.currentPrice) priceMap[item.ticker] = Number(pd.currentPrice)
-                if (pd?.stockName) nameMap[item.ticker] = pd.stockName
-              })
-              setPrices(priceMap)
-              setStockNames(nameMap)
-            })
-        }
-      })
-      .then(() => setLastRefreshed(new Date()))
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [])
-
-  const refreshDynamicData = useCallback(async () => {
-    if (portfolio.length === 0) return
-    if (!isMarketOpen()) return
+  const fetchData = useCallback(async () => {
     try {
-      const [ts, tc, ...priceResults] = await Promise.all([
+      const [p, b, ts, tc] = await Promise.all([
+        getEnrichedPortfolio(),
+        getBalance(),
         getTrailingStopStatus().catch(() => ({})),
         getTimeCutStatus().catch(() => ({})),
-        ...portfolio.map(item => getStockPrice(item.ticker).catch(() => null)),
       ])
+      setPortfolio(p)
+      setBalance(b)
       setTsStatus(ts)
       setTcStatus(tc)
-      const newPrices = {}
-      const newNames = {}
-      portfolio.forEach((item, i) => {
-        if (priceResults[i]) {
-          newPrices[item.ticker] = Number(priceResults[i].currentPrice)
-          if (priceResults[i].stockName) newNames[item.ticker] = priceResults[i].stockName
-        }
-      })
-      setPrices(prev => ({ ...prev, ...newPrices }))
-      setStockNames(prev => ({ ...prev, ...newNames }))
-      setLastRefreshed(new Date())
+
+      // 실시간 가격 업데이트
+      if (p.length > 0) {
+        const pricePromises = p.map(item => getStockPrice(item.ticker).catch(() => null))
+        const results = await Promise.all(pricePromises)
+        const priceMap = {}
+        results.forEach((res, i) => {
+          if (res) priceMap[p[i].ticker] = res.currentPrice
+        })
+        setPositionsPrices(priceMap)
+      }
     } catch (e) {
-      // 폴링 실패는 무시 (이전 값 유지)
+      console.error('Data fetch failed', e)
+    } finally {
+      setLoading(false)
     }
-  }, [portfolio])
+  }, [])
 
   useEffect(() => {
-    if (portfolio.length === 0) return
-    const interval = setInterval(refreshDynamicData, 60 * 1000)
+    fetchData()
+    const interval = setInterval(fetchData, 10000)
     return () => clearInterval(interval)
-  }, [portfolio, refreshDynamicData])
+  }, [fetchData])
 
-  if (loading) return <div className="loading">로딩 중...</div>
-  if (error) return <div className="error">오류: {error}</div>
+  const TAG_STYLES = {
+    1: { label: 'BB 1차 매수', color: '#ffd966', border: '1px solid #7a6419' },
+    2: { label: 'BB+RSI 완료', color: '#ffd966', border: '1px solid #7a6419' },
+    'extended': { label: '연장 홀딩', color: '#ce93d8', border: '1px solid #6a1b9a' },
+  }
+
+  if (loading && portfolio.length === 0) return <div className="loading">로딩 중...</div>
 
   return (
     <div className="page">
       <h2>대시보드</h2>
 
-      {/* 잔고 카드 */}
-      {balance && (
-        <div className="balance-card">
-          <div className="balance-row">
-            <span>총 자산</span>
-            <strong>{Number(balance.totalBalance).toLocaleString()}원</strong>
-          </div>
-          <div className="balance-row">
-            <span>현금</span>
-            <span>{Number(balance.cashBalance).toLocaleString()}원</span>
-          </div>
-          <div className="balance-row">
-            <span>주식 평가액</span>
-            <span>{Number(balance.stockBalance).toLocaleString()}원</span>
-          </div>
-          <div className="balance-row">
-            <span>손익</span>
-            <span className={balance.profitLoss >= 0 ? 'up' : 'down'}>
-              {balance.profitLoss >= 0 ? '+' : ''}{Number(balance.profitLoss).toLocaleString()}원
-              ({Number(balance.profitLossRate)}%)
-            </span>
-          </div>
-          {balance.mock && <p className="mock-badge">MOCK 데이터</p>}
+      <div className="balance-card">
+        <div className="balance-row">
+          <span>총 자산</span>
+          <strong>{balance.totalAsset.toLocaleString()}원</strong>
         </div>
-      )}
-
-      {/* 보유 종목 */}
-      <h3>
-        보유 종목
-        {lastRefreshed && (
-          <span className="refresh-time">
-            {lastRefreshed.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} 갱신
+        <div className="balance-row">
+          <span>현금</span>
+          <span>{balance.cash.toLocaleString()}원</span>
+        </div>
+        <div className="balance-row">
+          <span>손익</span>
+          <span className={balance.totalPnl >= 0 ? 'up' : 'down'}>
+            {balance.totalPnl >= 0 ? '+' : ''}{balance.totalPnl.toLocaleString()}원 
+            ({balance.totalPnlRate >= 0 ? '+' : ''}{balance.totalPnlRate.toFixed(2)}%)
           </span>
-        )}
-      </h3>
-      {portfolio.length === 0 ? (
-        <div className="holding-empty">
-          <div className="holding-empty-header">
-            <span>종목</span><span>수량</span><span>평균단가</span><span>현재가</span><span>평가손익</span>
-          </div>
-          <p className="empty" style={{ padding: '20px 0', fontSize: '13px' }}>
-            자동매매 시작 시 보유 종목이 표시됩니다
-          </p>
         </div>
-      ) : (
-        <div className="holding-list">
-          {portfolio.map(item => {
-            const currentPrice = prices[item.ticker]
-            const avgPrice = Number(item.avgPrice)
-            const qty = item.quantity
-            const pnl = currentPrice != null ? (currentPrice - avgPrice) * qty : null
-            const pnlRate = currentPrice != null ? ((currentPrice - avgPrice) / avgPrice * 100) : null
+      </div>
+
+      <h3>보유 종목 상태</h3>
+      <div className="holding-list">
+        {portfolio.length === 0 ? (
+          <p className="empty">보유 종목이 없습니다.</p>
+        ) : (
+          portfolio.map(item => {
             const ts = tsStatus[item.ticker]
             const tc = tcStatus[item.ticker]
-            const bi = buyInfo[item.ticker]
-
-            // 트레일링 스탑 남은 금액/% (현재가 있을 때만)
-            let remainingAmt = null
-            let remainingPct = null
-            if (ts && currentPrice) {
-              const stopPrice = Number(ts.stopPrice)
-              remainingAmt = currentPrice - stopPrice
-              remainingPct = (remainingAmt / currentPrice) * 100
-            }
+            const currentPrice = prices[item.ticker] || item.avgPrice
+            const pnl = (currentPrice - item.avgPrice) * item.quantity
+            const pnlRate = ((currentPrice - item.avgPrice) / item.avgPrice) * 100
+            
+            const buyStage = item.buyStage || 2;
+            const stageStyle = TAG_STYLES[buyStage];
+            const isExtended = tc && tc.remaining === 0 && tc.elapsed >= 3;
 
             return (
               <div key={item.ticker} className="holding-card">
                 <div className="holding-header">
-                  <span className="holding-name">{/^\d+$/.test(item.stockName) ? (stockNames[item.ticker] || item.stockName) : item.stockName}</span>
+                  <span className="holding-name">{item.stockName}</span>
                   <span className="holding-ticker">{item.ticker}</span>
                 </div>
-                {bi && (
-                  <div className="holding-tags">
-                    <span className="history-tag strategy">
-                      {STRATEGY_LABEL[bi.strategyName] ?? bi.strategyName}
-                    </span>
-                    {bi.marketState && (
-                      <span className="history-tag market">
-                        {MARKET_LABEL[bi.marketState] ?? bi.marketState}
-                      </span>
-                    )}
-                  </div>
-                )}
+                
+                <div className="holding-tags">
+                  <span className="history-tag" style={stageStyle}>{stageStyle.label}</span>
+                  {isExtended && (
+                    <span className="history-tag" style={TAG_STYLES['extended']}>연장 홀딩</span>
+                  )}
+                </div>
+
                 <div className="holding-row">
                   <span className="holding-meta">
-                    {qty}주 · 평균 {avgPrice.toLocaleString()}원
-                    {currentPrice != null && ` · 현재 ${currentPrice.toLocaleString()}원`}
-                    {ts?.peakPrice != null && (
+                    {item.quantity}주 · 평단 {Number(item.avgPrice).toLocaleString()}원 · 현재 {Number(currentPrice).toLocaleString()}원
+                    {ts && ts.peakPrice && (
                       <span style={{ color: '#7dccff', marginLeft: 4 }}>
                         · 고점 {Number(ts.peakPrice).toLocaleString()}원
                       </span>
                     )}
                   </span>
                 </div>
-                {pnl != null && (
-                  <div className={`holding-pnl ${pnl >= 0 ? 'up' : 'down'}`}>
-                    <span>평가손익 {pnl >= 0 ? '+' : ''}{Math.round(pnl).toLocaleString()}원</span>
-                    <span className="holding-rate">
-                      수익률 {pnlRate >= 0 ? '+' : ''}{pnlRate.toFixed(1)}% {pnl >= 0 ? '▲' : '▼'}
-                    </span>
-                  </div>
-                )}
+
+                <div className={`holding-pnl ${pnl >= 0 ? 'up' : 'down'}`}>
+                  <span>평가손익 {pnl >= 0 ? '+' : ''}{pnl.toLocaleString()}원</span>
+                  <span className="holding-rate">수익률 {pnlRate >= 0 ? '+' : ''}{pnlRate.toFixed(1)}% {pnl >= 0 ? '▲' : '▼'}</span>
+                </div>
+
                 {ts && (
                   <div className="holding-risk ts">
-                    트레일링 스탑: {Number(ts.stopPrice).toLocaleString()}원
-                    {remainingAmt != null && (
-                      <span className="risk-remain">
-                        {' '}│ {Math.round(remainingAmt).toLocaleString()}원({remainingPct.toFixed(1)}%) 남음
-                      </span>
+                    {buyStage === 1 ? (
+                      <span style={{ color: '#888' }}>트레일링 스탑: 2차 매수 대기 중</span>
+                    ) : (
+                      <>
+                        트레일링 스탑: {Number(ts.stopPrice).toLocaleString()}원
+                        <span className="risk-remain"> │ {(currentPrice - ts.stopPrice).toLocaleString()}원({((currentPrice - ts.stopPrice) / currentPrice * 100).toFixed(1)}%) 남음</span>
+                      </>
                     )}
-                    <span className="risk-note"> [1분 주기]</span>
                   </div>
                 )}
+                
                 {tc && (
                   <div className="holding-risk tc">
-                    타임컷: <strong>{tc.remaining}거래일</strong> 남음 (경과 {tc.elapsed}일)
+                    타임컷: {isExtended ? 
+                      <strong>조건 만족 연장 중 (D+{tc.elapsed})</strong> : 
+                      <><strong>{tc.remaining}거래일</strong> 남음 (D+{tc.elapsed})</>
+                    }
                   </div>
                 )}
               </div>
             )
-          })}
-        </div>
-      )}
+          })
+        )}
+      </div>
     </div>
   )
 }

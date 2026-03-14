@@ -79,7 +79,7 @@ public class TimeCutService {
         stateStore.removeBuyDate(ticker, mode);
     }
 
-    public void checkAndCut(String ticker, BigDecimal currentPrice, List<PortfolioItemDto> positions) {
+    public void checkAndCut(String ticker, BigDecimal currentPrice, List<PortfolioItemDto> positions, BigDecimal ma5) {
         StrategyConfig.TimeCutConfig config = strategyConfig.getTimeCut();
         if (!config.isEnabled()) return;
 
@@ -88,25 +88,45 @@ public class TimeCutService {
         LocalDate buyDate = buyDates.get(mapKey);
         if (buyDate == null) return;
 
-        boolean isHolding = positions.stream().anyMatch(p -> p.getTicker().equals(ticker));
-        if (!isHolding) {
+        Optional<PortfolioItemDto> positionOpt = positions.stream()
+                .filter(p -> p.getTicker().equals(ticker))
+                .findFirst();
+
+        if (positionOpt.isEmpty()) {
             buyDates.remove(mapKey);
             stateStore.removeBuyDate(ticker, mode);
             return;
         }
 
+        PortfolioItemDto position = positionOpt.get();
         int elapsed = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now(TradingCalendar.KST));
         int maxDays  = adminConfigStore.getTimeCutDays();
 
         if (elapsed >= maxDays) {
-            log.warn("[TimeCut][{}] 타임 컷 발동 — {} | 매수일: {} | 경과 거래일: {}일 ≥ {}일",
-                    mode, ticker, buyDate, elapsed, maxDays);
-            boolean sold = executeSell(ticker, currentPrice, positions, elapsed, maxDays);
-            if (sold) {
-                buyDates.remove(mapKey);
-                stateStore.removeBuyDate(ticker, mode);
+            // ── 지능형 타임컷 조건 체크 ──
+            // 1. 수익률 체크 (1.5% 미만인 경우)
+            BigDecimal avgPrice = position.getAvgPrice();
+            double profitRate = currentPrice.subtract(avgPrice)
+                    .divide(avgPrice, 4, java.math.RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100))
+                    .doubleValue();
+
+            // 2. MA5 체크 (현재가 < MA5 인 경우)
+            boolean isBelowMa5 = ma5 != null && currentPrice.compareTo(ma5) < 0;
+
+            boolean shouldCut = profitRate < 1.5 || isBelowMa5;
+
+            if (shouldCut) {
+                String reason = isBelowMa5 ? "MA5 하회" : String.format("수익률 저조(%.1f%%)", profitRate);
+                log.warn("[TimeCut][{}] 타임 컷 발동 — {} | 사유: {} | 경과: {}일", mode, ticker, reason, elapsed);
+                boolean sold = executeSell(ticker, currentPrice, positions, elapsed, maxDays);
+                if (sold) {
+                    buyDates.remove(mapKey);
+                    stateStore.removeBuyDate(ticker, mode);
+                }
             } else {
-                log.warn("[TimeCut] 매도 최종 실패 — {} buyDates 유지, 다음 주기(5분 후)에 재시도", ticker);
+                log.info("[TimeCut][{}] 조건 만족으로 홀딩 연장 — {} | 수익률: %.1f%%, MA5: {}", 
+                        mode, ticker, profitRate, ma5);
             }
         }
     }

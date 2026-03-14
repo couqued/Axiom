@@ -82,21 +82,31 @@ public class TrailingStopService {
         String mode = adminConfigStore.getTradingMode();
         String mapKey = key(mode, ticker);
 
-        boolean isHolding = positions.stream().anyMatch(p -> p.getTicker().equals(ticker));
-        if (!isHolding) {
+        Optional<PortfolioItemDto> positionOpt = positions.stream()
+                .filter(p -> p.getTicker().equals(ticker))
+                .findFirst();
+
+        if (positionOpt.isEmpty()) {
             peakPrices.remove(mapKey);
             stateStore.removePeakPrice(ticker, mode);
             return;
         }
 
+        // ── V2: 분할 매수 단계 체크 ──
+        // 1차 매수(Stage 1) 상태이면 트레일링 스탑 보류 (2차 매수를 기다림)
+        PortfolioItemDto position = positionOpt.get();
+        if (position.getBuyStage() != null && position.getBuyStage() == 1) {
+            log.debug("[TrailingStop][{}] {} | 1차 매수 상태 — 트레일링 스탑 보류", mode, ticker);
+            // 1차 매수 중에는 고점 갱신도 하지 않음 (평단가가 바뀔 수 있으므로)
+            return;
+        }
+
         BigDecimal prevPeak = peakPrices.get(mapKey);
         if (prevPeak == null) {
-            positions.stream()
-                    .filter(p -> p.getTicker().equals(ticker))
-                    .map(PortfolioItemDto::getAvgPrice)
-                    .filter(avg -> avg != null && avg.compareTo(BigDecimal.ZERO) > 0)
-                    .findFirst()
-                    .ifPresent(avg -> peakPrices.put(mapKey, avg));
+            BigDecimal avgPrice = position.getAvgPrice();
+            if (avgPrice != null && avgPrice.compareTo(BigDecimal.ZERO) > 0) {
+                peakPrices.put(mapKey, avgPrice);
+            }
             prevPeak = peakPrices.get(mapKey);
         }
 

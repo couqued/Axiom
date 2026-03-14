@@ -1,15 +1,13 @@
 package com.axiom.strategy.controller;
 
+import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.engine.StrategyEngine;
 import com.axiom.strategy.service.MarketState;
 import com.axiom.strategy.service.MarketStateService;
+import com.axiom.strategy.util.TradingCalendar;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -17,8 +15,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import com.axiom.strategy.util.TradingCalendar;
 
 @RestController
 @RequestMapping("/api/strategy")
@@ -134,6 +130,12 @@ public class StrategyController {
         body.put("evaluatedAt", evaluatedAt != null ? evaluatedAt.toString() : null);
         body.put("items", ranking);
         return ResponseEntity.ok(body);
+    }
+
+    /** 전략 중심 포트폴리오 조회 (buyStage 등 메타데이터 포함) */
+    @GetMapping("/portfolio")
+    public ResponseEntity<List<PortfolioItemDto>> getEnrichedPortfolio() {
+        return ResponseEntity.ok(strategyEngine.getEnrichedPortfolio());
     }
 
 }
