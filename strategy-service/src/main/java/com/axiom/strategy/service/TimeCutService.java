@@ -21,6 +21,7 @@ import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -125,8 +126,8 @@ public class TimeCutService {
                     stateStore.removeBuyDate(ticker, mode);
                 }
             } else {
-                log.info("[TimeCut][{}] 조건 만족으로 홀딩 연장 — {} | 수익률: %.1f%%, MA5: {}", 
-                        mode, ticker, profitRate, ma5);
+                log.info("[TimeCut][{}] 조건 만족으로 홀딩 연장 — {} | 수익률: {}%, MA5: {}", 
+                        mode, ticker, String.format("%.1f", profitRate), ma5);
             }
         }
     }

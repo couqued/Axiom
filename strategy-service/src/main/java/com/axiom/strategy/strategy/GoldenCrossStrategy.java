@@ -51,8 +51,15 @@ public class GoldenCrossStrategy implements TradingStrategy {
 
         BigDecimal currentPrice = candles.get(size - 1).getClosePrice();
 
-        log.debug("[GoldenCross] {} | MA5: {} → {} | MA20: {} → {}",
-                ticker, ma5Prev, ma5Curr, ma20Prev, ma20Curr);
+        // EMA 계산 (매도용)
+        BigDecimal ema5Curr  = calcEMA(candles, size - 1, SHORT_PERIOD);
+        BigDecimal ema20Curr = calcEMA(candles, size - 1, LONG_PERIOD);
+        BigDecimal ema5Prev  = calcEMA(candles, size - 2, SHORT_PERIOD);
+        BigDecimal ema20Prev = calcEMA(candles, size - 2, LONG_PERIOD);
+
+        log.debug("[GoldenCross] {} | SMA5: {}→{} SMA20: {}→{} | EMA5: {}→{} EMA20: {}→{}",
+                ticker, ma5Prev, ma5Curr, ma20Prev, ma20Curr,
+                ema5Prev, ema5Curr, ema20Prev, ema20Curr);
 
         // 골든크로스: 전일 MA5 ≤ MA20, 당일 MA5 > MA20
         if (ma5Prev.compareTo(ma20Prev) <= 0 && ma5Curr.compareTo(ma20Curr) > 0) {
@@ -77,15 +84,15 @@ public class GoldenCrossStrategy implements TradingStrategy {
                     .build();
         }
 
-        // 데드크로스: 전일 MA5 ≥ MA20, 당일 MA5 < MA20
-        if (ma5Prev.compareTo(ma20Prev) >= 0 && ma5Curr.compareTo(ma20Curr) < 0) {
+        // 데드크로스: 전일 EMA5 ≥ EMA20, 당일 EMA5 < EMA20
+        if (ema5Prev.compareTo(ema20Prev) >= 0 && ema5Curr.compareTo(ema20Curr) < 0) {
             return SignalDto.builder()
                     .action(SignalDto.Action.SELL)
                     .ticker(ticker)
                     .price(currentPrice)
                     .strategyName(getName())
-                    .reason(String.format("데드크로스 — MA%d(%.0f) < MA%d(%.0f)",
-                            SHORT_PERIOD, ma5Curr, LONG_PERIOD, ma20Curr))
+                    .reason(String.format("데드크로스(EMA) — EMA%d(%.0f) < EMA%d(%.0f)",
+                            SHORT_PERIOD, ema5Curr, LONG_PERIOD, ema20Curr))
                     .signalAt(LocalDateTime.now())
                     .build();
         }
@@ -112,6 +119,28 @@ public class GoldenCrossStrategy implements TradingStrategy {
             cnt++;
         }
         return cnt == 0 ? 1.0 : (double) sum / cnt;
+    }
+
+    /**
+     * endIndex 기준으로 period일 지수이동평균(EMA)을 계산한다.
+     * 초기값: 첫 period 캔들의 SMA. 이후 EMA 공식으로 forward 계산.
+     */
+    private BigDecimal calcEMA(List<CandleDto> candles, int endIndex, int period) {
+        // 시드: 첫 period 캔들의 SMA
+        BigDecimal ema = BigDecimal.ZERO;
+        for (int i = 0; i < period; i++) {
+            ema = ema.add(candles.get(i).getClosePrice());
+        }
+        ema = ema.divide(BigDecimal.valueOf(period), 6, RoundingMode.HALF_UP);
+
+        // EMA 공식 적용: period 인덱스부터 endIndex까지
+        BigDecimal k = BigDecimal.valueOf(2.0 / (period + 1));
+        BigDecimal oneMinusK = BigDecimal.ONE.subtract(k);
+        for (int i = period; i <= endIndex; i++) {
+            BigDecimal price = candles.get(i).getClosePrice();
+            ema = price.multiply(k).add(ema.multiply(oneMinusK));
+        }
+        return ema.setScale(2, RoundingMode.HALF_UP);
     }
 
     /**

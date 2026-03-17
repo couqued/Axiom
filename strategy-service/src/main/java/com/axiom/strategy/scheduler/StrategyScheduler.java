@@ -12,7 +12,10 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -68,6 +71,20 @@ public class StrategyScheduler {
         sendHourlySlack(15);
     }
 
+    private static String reasonLabel(String reason) {
+        return switch (reason) {
+            case "이미보유"      -> "이미 보유 중";
+            case "2차신호"      -> "2차 신호 / 1차 포지션 없음";
+            case "캔들없음"     -> "캔들 데이터 없음";
+            case "캔들부족"     -> "캔들 부족";
+            case "시장경보"     -> "시장 경보";
+            case "최대보유"     -> "최대 보유 수 초과";
+            case "그룹한도(볼린저)" -> "그룹 한도(볼린저)";
+            case "그룹한도(추세)"   -> "그룹 한도(추세)";
+            default             -> reason;
+        };
+    }
+
     private void sendHourlySlack(int hour) {
         log.info("[Scheduler] 시간별 요약 Slack 시도 — {}시", hour);
         List<StrategyEngine.RunRecord> hrRuns = strategyEngine.getTodayRuns().stream()
@@ -86,15 +103,25 @@ public class StrategyScheduler {
                 .flatMap(r -> r.boughtList().stream())
                 .map(StrategyEngine.TradeRecord::stockName)
                 .distinct().collect(Collectors.toList());
-        List<String> skipSummary = hrRuns.stream()
+        // reason → 종목명 목록으로 그룹화
+        Map<String, List<String>> skipByReason = new LinkedHashMap<>();
+        hrRuns.stream()
                 .flatMap(r -> r.skippedList().stream())
-                .map(s -> s.stockName() + "(" + s.reason() + ")")
-                .distinct().collect(Collectors.toList());
+                .forEach(s -> skipByReason
+                        .computeIfAbsent(s.reason(), k -> new ArrayList<>())
+                        .add(s.stockName() != null && !s.stockName().isBlank() ? s.stockName() : s.ticker()));
+
+        // 중복 제거 및 라인 포맷
+        List<String> skipLines = skipByReason.entrySet().stream()
+                .map(e -> reasonLabel(e.getKey()) + " : " +
+                          e.getValue().stream().distinct().collect(Collectors.joining(", ")))
+                .collect(Collectors.toList());
+
         long noSignalCount = hrRuns.stream()
                 .filter(r -> r.bought() == 0 && r.skippedList().isEmpty()).count();
 
         log.info("[Scheduler] 시간별 요약 Slack 발송 — {}시, {}회 실행", hour, hrRuns.size());
         slackNotifier.sendHourlySummary(hour, hrRuns.size(), evaluated,
-                bought, sold, errors, boughtTickers, skipSummary, noSignalCount);
+                bought, sold, errors, boughtTickers, skipLines, noSignalCount);
     }
 }

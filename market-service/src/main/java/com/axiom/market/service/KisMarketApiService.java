@@ -2,6 +2,7 @@ package com.axiom.market.service;
 
 import com.axiom.market.config.KisApiConfig;
 import com.axiom.market.dto.StockPriceDto;
+import com.axiom.market.store.TradingModeStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -25,22 +26,25 @@ public class KisMarketApiService {
     private final WebClient kisRealWebClient;
     private final KisApiConfig kisApiConfig;
     private final KisTokenService kisTokenService;
+    private final TradingModeStore tradingModeStore;
 
     public KisMarketApiService(WebClient kisWebClient,
                                @Qualifier("kisRealWebClient") WebClient kisRealWebClient,
                                KisApiConfig kisApiConfig,
-                               KisTokenService kisTokenService) {
+                               KisTokenService kisTokenService,
+                               TradingModeStore tradingModeStore) {
         this.kisWebClient     = kisWebClient;
         this.kisRealWebClient = kisRealWebClient;
         this.kisApiConfig     = kisApiConfig;
         this.kisTokenService  = kisTokenService;
+        this.tradingModeStore = tradingModeStore;
     }
 
     /** ticker → 한글 종목명 캐시 (서비스 재시작 전까지 유지, 종목명은 변하지 않음) */
     private final Map<String, String> stockNameCache = new ConcurrentHashMap<>();
 
     public StockPriceDto getCurrentPrice(String ticker) {
-        if (kisApiConfig.isMock()) {
+        if (tradingModeStore.isMock()) {
             return getMockPrice(ticker);
         }
         return getKisPrice(ticker);
@@ -137,12 +141,15 @@ public class KisMarketApiService {
 
     @SuppressWarnings("unchecked")
     private StockPriceDto getKisPrice(String ticker) {
-        KisApiConfig.ModeConfig active = kisApiConfig.getActive();
-        String token = kisTokenService.getAccessToken();
+        boolean useReal = tradingModeStore.isReal();
+        KisApiConfig.ModeConfig active = useReal ? kisApiConfig.getReal() : kisApiConfig.getPaper();
+        String token = useReal ? kisTokenService.getRealAccessToken() : kisTokenService.getAccessToken();
 
-        log.info("[KIS-{}] 현재가 조회 - ticker: {}", kisApiConfig.getMode().toUpperCase(), ticker);
+        log.info("[KIS-{}] 현재가 조회 - ticker: {}", tradingModeStore.getMode().toUpperCase(), ticker);
 
-        Map<String, Object> response = kisWebClient.get()
+        // real 모드면 kisRealWebClient(항상 real 서버), paper 모드면 kisWebClient 사용
+        WebClient activeClient = useReal ? kisRealWebClient : kisWebClient;
+        Map<String, Object> response = activeClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/uapi/domestic-stock/v1/quotations/inquire-price")
                         .queryParam("fid_cond_mrkt_div_code", "J")

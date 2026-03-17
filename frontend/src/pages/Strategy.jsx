@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { getMarketState, refreshMarketState, runStrategy, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getSignalGap, triggerSignalGapRefresh } from '../api/stockApi'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { getMarketState, refreshMarketState, runStrategy, getRunStatus, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getSignalGap, triggerSignalGapRefresh } from '../api/stockApi'
 
 const STRATEGY_KO = {
   'golden-cross': '골든크로스',
@@ -85,16 +85,36 @@ export default function Strategy({ liveAdminConfig }) {
     }
   }
 
+  const runPollRef = useRef(null)
+
   const handleRun = async () => {
     setRunning(true)
-    setRunMsg(null)
+    setRunMsg({ ok: true, text: '전략 실행 중...' })
     try {
-      const res = await runStrategy()
-      setRunMsg({ ok: true, text: res.result })
-      await fetchData()
+      await runStrategy()
+      runPollRef.current = setInterval(async () => {
+        try {
+          const status = await getRunStatus()
+          if (!status.running) {
+            clearInterval(runPollRef.current)
+            runPollRef.current = null
+            if (status.message) {
+              setRunMsg({ ok: !status.message.startsWith('실행 오류'), text: status.message })
+            } else {
+              setRunMsg({ ok: true, text: '실행 완료' })
+            }
+            setRunning(false)
+            await fetchData()
+          }
+        } catch (e) {
+          clearInterval(runPollRef.current)
+          runPollRef.current = null
+          setRunMsg({ ok: false, text: '상태 조회 실패: ' + e.message })
+          setRunning(false)
+        }
+      }, 4000)
     } catch (e) {
       setRunMsg({ ok: false, text: '실행 오류: ' + e.message })
-    } finally {
       setRunning(false)
     }
   }
@@ -197,47 +217,94 @@ export default function Strategy({ liveAdminConfig }) {
       {/* 4. 매수 신호 근접도 (V2 버전 적용) */}
       <div className="skipped-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <h3>매수 신호 근접도 <span className="section-sub">필요 변화% 상위 10개</span></h3>
+          <h3>매수 신호 근접도 <span className="section-sub">진입 신호 근접도 상위 10개</span></h3>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-            {signalGapComputedAt && <span className="section-note">{new Date(signalGapComputedAt).toLocaleTimeString()} 기준</span>}
+            {signalGapLoading
+              ? <span className="section-note" style={{ color: '#ffd966' }}>조회 중...</span>
+              : signalGapComputedAt && <span className="section-note">조회 완료 {new Date(signalGapComputedAt).toLocaleTimeString()}</span>
+            }
             <button className="refresh-btn small" onClick={loadSignalGap} disabled={signalGapLoading}>조회</button>
           </div>
         </div>
-        <div className="v2-table" style={{ marginTop: '12px' }}>
-          <div className="v2-header" style={{ display: 'grid', gridTemplateColumns: '40px 2fr 1.5fr 1fr 1.5fr 1.2fr', paddingBottom: '10px', borderBottom: '1px solid #333', fontSize: '11px', color: '#666', textAlign: 'center', lineHeight: '1.4' }}>
-            <span>순위</span>
-            <span style={{ textAlign: 'left' }}>종목명<br/>(현재가)</span>
-            <span>1차 목표<br/>(BB하단)</span>
-            <span>RSI<br/>(14)</span>
-            <span>익절 목표<br/>(BB상단 / RSI)</span>
-            <span>진입<br/>점수</span>
-          </div>
-          {signalGap.map(item => (
-            <div key={item.ticker} className="v2-row" style={{ display: 'grid', gridTemplateColumns: '40px 2fr 1.5fr 1fr 1.5fr 1.2fr', padding: '12px 0', borderBottom: '1px solid #222', alignItems: 'center', textAlign: 'center', fontSize: '13px' }}>
-              <span>{item.rank}</span>
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ fontWeight: 'bold' }}>{item.stockName}</div>
-                <div style={{ fontSize: '11px', color: '#e0e0e0' }}>{item.currentPrice.toLocaleString()}원</div>
+        {(() => {
+          const STRATEGY_BADGE = {
+            'golden-cross': { label: '골든크로스', color: '#ffd966' },
+            'volatility-breakout': { label: '변동성돌파', color: '#4fa3ff' },
+            'rsi-bollinger': { label: 'RSI+볼린저밴드', color: '#a78bfa' },
+          }
+          return (
+            <div className="signal-table">
+              <div className="signal-table-header">
+                <span>순위</span>
+                <span className="signal-col-left">종목명<br/>(현재가)</span>
+                <span>매수기준가</span>
+                <span>RSI<br/>(14)</span>
+                <span>청산 기준</span>
+                <span>진입<br/>점수</span>
               </div>
-              <div>
-                <div>{Math.round(item.threshold).toLocaleString()}</div>
-                <div style={{ fontSize: '10px', color: item.gapPct <= 0 ? '#ff4d4d' : '#4fa3ff' }}>{item.gapPct <= 0 ? '충족' : `-${item.gapPct.toFixed(1)}%`}</div>
-              </div>
-              <div style={{ color: item.rsi < 30 ? '#ff4d4d' : '#e0e0e0' }}>{item.rsi >= 0 ? item.rsi.toFixed(1) : '-'}</div>
-              <div>
-                <div style={{ fontSize: '11px', color: '#ff4d4d' }}>{item.bbUpper > 0 ? Math.round(item.bbUpper).toLocaleString() : '-'}</div>
-                <div style={{ fontSize: '10px', color: '#888' }}>RSI 70 목표</div>
-              </div>
-              <div><strong style={{ color: item.score >= 80 ? '#ff4d4d' : item.score > 0 ? '#ffd966' : '#444' }}>{item.score > 0 ? `${item.score.toFixed(0)}점` : '-'}</strong></div>
+              {signalGap.length === 0
+                ? <div className="signal-empty">
+                    {signalGapComputedAt
+                      ? '현재 볼린저밴드 하단 조건을 만족하는 종목이 없습니다.'
+                      : '조회 버튼을 눌러 데이터를 불러오세요'}
+                  </div>
+                : signalGap.map(item => (
+                <div key={item.ticker} className="signal-table-row">
+                  <span>{item.rank}</span>
+                  <div className="signal-col-left">
+                    <div className="signal-stock-name">{item.stockName}</div>
+                    <div className="signal-stock-price">{item.currentPrice.toLocaleString()}원</div>
+                    <span className="signal-strategy-badge" style={{ color: STRATEGY_BADGE[item.strategy]?.color }}>
+                      {STRATEGY_BADGE[item.strategy]?.label}
+                    </span>
+                  </div>
+                  <div>
+                    <div>{Math.round(item.threshold).toLocaleString()}</div>
+                    <div style={{ fontSize: '10px', color:
+                      (item.strategy === 'rsi-bollinger' ? item.currentPrice < item.threshold : item.gapPct <= 0)
+                      ? '#ffd966' : '#4fa3ff' }}>
+                      {item.strategy === 'rsi-bollinger'
+                        ? (item.currentPrice < item.threshold
+                            ? (item.rsi < 30 ? '2차 조건 충족' : '1차 충족 (RSI 대기)')
+                            : `-${item.gapPct.toFixed(1)}%`)
+                        : item.gapPct <= 0
+                        ? (item.strategy === 'golden-cross' ? '골든크로스 발생' : '목표가 돌파')
+                        : `-${item.gapPct.toFixed(1)}%`}
+                    </div>
+                  </div>
+                  <div style={{ color: item.rsi < 30 ? '#ff4d4d' : '#e0e0e0' }}>{item.rsi >= 0 ? item.rsi.toFixed(1) : '-'}</div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#ff4d4d' }}>
+                      {item.strategy === 'rsi-bollinger'
+                        ? (item.bbUpper > 0 ? Math.round(item.bbUpper).toLocaleString() + '원' : '-')
+                        : <span style={{ fontSize: '11px', color: '#aaa' }}>
+                            {item.strategy === 'volatility-breakout' ? '당일 청산' : '데드크로스 매도'}
+                          </span>}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#888' }}>{item.strategy === 'rsi-bollinger' ? 'or RSI≥70' : ''}</div>
+                  </div>
+                  <div><strong style={{ color: item.score >= 80 ? '#ff4d4d' : item.score > 0 ? '#ffd966' : '#444' }}>{item.score > 0 ? `${item.score.toFixed(0)}점` : '-'}</strong></div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )
+        })()}
       </div>
 
       {/* 5. BUY 신호 랭킹 (V2 버전 적용) */}
       <div className="skipped-card">
-        <h3>BUY 신호 랭킹 <span className="section-sub">최근 실행 결과</span></h3>
-        {ranking.map(item => (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <h3>BUY 신호 랭킹 <span className="section-sub">최근 실행 결과</span></h3>
+          {rankingEvalAt && <span className="section-note">실행 완료 {new Date(rankingEvalAt).toLocaleTimeString()}</span>}
+        </div>
+        {ranking.length === 0
+          ? <div className="signal-empty">
+              {rankingEvalAt
+                ? '마지막 실행에서 BUY 신호가 발생한 종목이 없습니다.'
+                : <>아직 전략이 실행되지 않았습니다.<br/>위의 <strong>전략 즉시 실행</strong> 버튼을 누르거나 스케줄러 실행을 기다려주세요.</>
+              }
+            </div>
+          : ranking.map(item => (
           <div key={item.ticker} className="holding-card" style={{ borderLeft: '4px solid #4fa3ff', position: 'relative', marginBottom: '10px' }}>
             <div style={{ position: 'absolute', top: '14px', right: '14px', fontSize: '18px', fontWeight: 'bold', color: '#ff4d4d' }}>{item.score.toFixed(0)}점</div>
             <div className="holding-header"><span style={{ color: '#4fa3ff', fontWeight: 'bold', marginRight: '8px' }}>#{item.rank}</span><span className="holding-name">{item.stockName}</span><span className="holding-ticker">{item.ticker}</span></div>
@@ -252,6 +319,7 @@ export default function Strategy({ liveAdminConfig }) {
         <div className="config-grid">
           <div className="config-item"><span className="config-label">1회 매수금액</span><span className="config-value">{activeSettings ? activeSettings.investAmountKrw.toLocaleString() + '원' : '—'}</span></div>
           <div className="config-item"><span className="config-label">최대 보유 종목</span><span className="config-value">{activeSettings ? activeSettings.maxPositions + '종목' : '—'}</span></div>
+          <div className="config-item"><span className="config-label">슬롯 배분</span><span className="config-value">볼린저 {activeSettings?.bollingerMaxPositions ?? '—'} / 추세 {activeSettings ? (activeSettings.maxPositions ?? 0) - (activeSettings.bollingerMaxPositions ?? 0) : '—'}</span></div>
           <div className="config-item"><span className="config-label">트레일링 스탑</span><span className="config-value">{activeSettings ? `고점 -${activeSettings.trailingStopPct}%` : '—'}</span></div>
           <div className="config-item"><span className="config-label">타임 컷</span><span className="config-value">{activeSettings ? activeSettings.timeCutDays + '거래일' : '—'}</span></div>
           <div className="config-item"><span className="config-label">지수 하락 매수차단</span><span className="config-value">
@@ -265,7 +333,7 @@ export default function Strategy({ liveAdminConfig }) {
             )}
           </span></div>
           <div className="config-item"><span className="config-label">감시 유니버스</span><span className="config-value">코스피200 + 코스닥150</span></div>
-          <div className="config-item"><span className="config-label">실행 주기</span><span className="config-value">1분 (09:00~15:20)</span></div>
+          <div className="config-item"><span className="config-label">트레일링 스탑 실행 주기</span><span className="config-value">1분 (09:00~15:20)</span></div>
         </div>
       </div>
     </div>

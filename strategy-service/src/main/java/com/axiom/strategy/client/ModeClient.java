@@ -20,9 +20,13 @@ public class ModeClient {
     @Value("${portfolio-service.url}")
     private String portfolioServiceUrl;
 
+    @Value("${market-service.url}")
+    private String marketServiceUrl;
+
     public void propagateTradingMode(String mode) {
         propagateTo(orderServiceUrl, "order-service", mode);
         propagateTo(portfolioServiceUrl, "portfolio-service", mode);
+        propagateTo(marketServiceUrl, "market-service", mode);
     }
 
     private void propagateTo(String baseUrl, String serviceName, String mode) {

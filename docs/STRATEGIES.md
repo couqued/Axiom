@@ -63,7 +63,10 @@
     ↓
 [Phase 2: BUY score 정렬 → 상위 maxPositions개 매수]
     buyQueue.sort(score 내림차순)
-    ③ maxPositions(3) 초과 시 스킵 (MAX_POSITIONS)
+    ③ maxPositions 초과 시 스킵 (MAX_POSITIONS)
+    ④ 그룹 슬롯 한도 초과 시 스킵 (GROUP_LIMIT)
+       - rsi-bollinger: bollingerMaxPositions 한도
+       - volatility-breakout / golden-cross: (maxPositions - bollingerMaxPositions) 한도
     수량 = floor(investAmountKrw / 현재가), 0주이면 BUDGET_INSUFFICIENT 스킵
     ↓
 [공통 리스크 관리]
@@ -551,7 +554,8 @@ PATCH http://localhost:8084/api/strategy/admin/config
 {
   "targetMode": "paper",
   "investAmountKrw": 300000,
-  "maxPositions": 2,
+  "maxPositions": 4,
+  "bollingerMaxPositions": 2,
   "trailingStopPct": 5.0,
   "timeCutDays": 5,
   "indexDropBlockPct": 1.0
@@ -568,7 +572,8 @@ GET http://localhost:8084/api/strategy/admin/status
     "paper": {
       "paused": false,
       "investAmountKrw": 500000,
-      "maxPositions": 3,
+      "maxPositions": 4,
+      "bollingerMaxPositions": 2,
       "trailingStopPct": 7.0,
       "timeCutDays": 3,
       "indexDropBlockPct": 1.0
@@ -576,7 +581,8 @@ GET http://localhost:8084/api/strategy/admin/status
     "real": {
       "paused": false,
       "investAmountKrw": 1000000,
-      "maxPositions": 3,
+      "maxPositions": 4,
+      "bollingerMaxPositions": 2,
       "trailingStopPct": 7.0,
       "timeCutDays": 3,
       "indexDropBlockPct": 1.0
@@ -600,6 +606,8 @@ GET http://localhost:8084/api/strategy/admin/status
 | (real) 1회 매수금액 | `real.investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
 | (paper) 최대 보유 종목 수 | `paper.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
 | (real) 최대 보유 종목 수 | `real.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
+| (paper) 볼린저 그룹 슬롯 수 | `paper.bollingerMaxPositions` | `maxPositions / 2` (최소 1) | 다음 5분 사이클 |
+| (real) 볼린저 그룹 슬롯 수 | `real.bollingerMaxPositions` | `maxPositions / 2` (최소 1) | 다음 5분 사이클 |
 | (paper) 트레일링 스탑 % | `paper.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
 | (real) 트레일링 스탑 % | `real.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
 | (paper) 타임 컷 거래일 | `paper.timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
@@ -736,17 +744,44 @@ BUY 수량 = floor(adminConfigStore.getInvestAmountKrw() / 현재가)
 
 SELL은 수량을 직접 계산하지 않고, portfolio-service에서 실제 보유 수량을 조회하여 **전량 매도**합니다.
 
-### BUY 3단계 가드
+### BUY 4단계 가드
 
 | 단계 | 조건 | 처리 | skip_reason 기록 |
 |------|------|------|-----------------|
 | ① 시장경보 | `!priceData.isSafe()` | BUY 스킵 (투자주의/경고/위험 종목 제외) | `MARKET_WARN` |
 | ② 중복 보유 | `positions.contains(ticker)` | BUY 스킵 (이미 보유 중인 종목 재진입 방지) | — (기록 없음) |
-| ③ 한도 초과 | `positions.size() + boughtThisRun[0] >= maxPositions` | BUY 스킵 (최대 3종목 초과 방지) | `MAX_POSITIONS` |
+| ③ 총량 한도 | `positions.size() + boughtThisRun[0] >= maxPositions` | BUY 스킵 (전체 최대 종목 수 초과 방지) | `MAX_POSITIONS` |
+| ④ 그룹 한도 | `bollingerHeld + boughtBollingerThisRun[0] >= bollingerMaxPositions` (볼린저 신호) 또는 `trendHeld + boughtTrendThisRun[0] >= trendMaxPositions` (추세 신호) | BUY 스킵 (그룹 슬롯 한도 초과) | `GROUP_LIMIT` |
+
+> ④는 EXTREME_FEAR bypass 매수와 레거시 포지션(`entryTag=null`)에는 적용되지 않습니다.
 
 수량 부족(투자금으로 1주 미만): `handleSignal()` 내에서 `BUDGET_INSUFFICIENT` 기록 후 스킵.
 
 스킵 기록은 order-service의 `skipped_signals` 테이블에 저장됩니다 (당일 동일 ticker+reason은 upsert로 count 누적).
+
+### 그룹 슬롯 분리 (bollingerMaxPositions)
+
+`maxPositions`를 두 그룹으로 분리하여 시장 상태 전환 시 슬롯 경합을 방지합니다.
+
+```
+bollingerMaxPositions = 2  (볼린저 전용)
+trendMaxPositions     = maxPositions - bollingerMaxPositions  (추세 전용)
+
+예) maxPositions=4, bollingerMaxPositions=2
+  → rsi-bollinger: 최대 2종목
+  → volatility-breakout + golden-cross: 최대 2종목
+```
+
+**entryTag 저장**: 매수 성공 시 전략명을 `entryTag`로 `strategy_state` DB에 저장합니다.
+재기동 후 `loadAllEntryTags()`로 복구하여 기존 포지션의 그룹 귀속을 유지합니다.
+
+| 시나리오 | 결과 |
+|---------|------|
+| 횡보장에서 볼린저 2슬롯 소진 후 볼린저 신호 | 그룹 한도 → 스킵 |
+| 볼린저 2슬롯 소진 → 상승장 전환 → 추세 신호 | 추세 슬롯 여유 있으면 정상 매수 |
+| 레거시 포지션 (entryTag=null) | 총량 체크만 적용, 그룹 체크 미적용 |
+| 2차 매수 (물타기) | 그룹 체크 우회 |
+| EXTREME_FEAR bypass | 총량 초과 허용 + 그룹 체크도 우회 |
 
 ### `boughtThisRun` 카운터
 

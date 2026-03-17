@@ -7,5 +7,6 @@ public record AdminConfigDto(
         Integer maxPositions,
         Double trailingStopPct,
         Integer timeCutDays,
-        Double indexDropBlockPct
+        Double indexDropBlockPct,
+        Integer bollingerMaxPositions
 ) {}

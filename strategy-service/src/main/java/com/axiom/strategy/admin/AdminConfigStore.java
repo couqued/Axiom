@@ -29,19 +29,21 @@ public class AdminConfigStore {
 
     @PostConstruct
     void init() {
-        int    defaultInvest = strategyConfig.getPositionSizing().getInvestAmountKrw();
-        int    defaultMaxPos = strategyConfig.getPositionSizing().getMaxPositions();
-        double defaultTs     = strategyConfig.getTrailingStop().getStopPercent();
-        int    defaultTc     = strategyConfig.getTimeCut().getMaxHoldingDays();
-        double defaultIdx    = 1.0;
+        int    defaultInvest    = strategyConfig.getPositionSizing().getInvestAmountKrw();
+        int    defaultMaxPos    = strategyConfig.getPositionSizing().getMaxPositions();
+        double defaultTs        = strategyConfig.getTrailingStop().getStopPercent();
+        int    defaultTc        = strategyConfig.getTimeCut().getMaxHoldingDays();
+        double defaultIdx       = 1.0;
+        int    defaultBollinger = Math.max(1, defaultMaxPos / 2);
 
-        paperSettings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx);
-        realSettings  = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx);
+        paperSettings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultBollinger);
+        realSettings  = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultBollinger);
         loadFromFile();
     }
 
     public record ModeSettings(boolean paused, int investAmountKrw, int maxPositions,
-                               double trailingStopPct, int timeCutDays, double indexDropBlockPct) {}
+                               double trailingStopPct, int timeCutDays, double indexDropBlockPct,
+                               int bollingerMaxPositions) {}
 
     // ── Accessors ────────────────────────────────────────────────────────────
 
@@ -58,12 +60,13 @@ public class AdminConfigStore {
     }
 
     // Backward-compat delegation to active mode
-    public boolean isPaused()              { return getActiveSettings().paused(); }
-    public int getInvestAmountKrw()        { return getActiveSettings().investAmountKrw(); }
-    public int getMaxPositions()           { return getActiveSettings().maxPositions(); }
-    public double getTrailingStopPct()     { return getActiveSettings().trailingStopPct(); }
-    public int getTimeCutDays()            { return getActiveSettings().timeCutDays(); }
-    public double getIndexDropBlockPct()   { return getActiveSettings().indexDropBlockPct(); }
+    public boolean isPaused()                  { return getActiveSettings().paused(); }
+    public int getInvestAmountKrw()            { return getActiveSettings().investAmountKrw(); }
+    public int getMaxPositions()               { return getActiveSettings().maxPositions(); }
+    public double getTrailingStopPct()         { return getActiveSettings().trailingStopPct(); }
+    public int getTimeCutDays()                { return getActiveSettings().timeCutDays(); }
+    public double getIndexDropBlockPct()       { return getActiveSettings().indexDropBlockPct(); }
+    public int getBollingerMaxPositions()      { return getActiveSettings().bollingerMaxPositions(); }
 
     // ── Setters ──────────────────────────────────────────────────────────────
 
@@ -81,7 +84,8 @@ public class AdminConfigStore {
                 getSettings(mode).maxPositions(),
                 getSettings(mode).trailingStopPct(),
                 getSettings(mode).timeCutDays(),
-                getSettings(mode).indexDropBlockPct());
+                getSettings(mode).indexDropBlockPct(),
+                getSettings(mode).bollingerMaxPositions());
     }
 
     /** Backward-compat: active 모드 paused 변경 */
@@ -92,25 +96,28 @@ public class AdminConfigStore {
     /** targetMode == null 이면 현재 활성 모드의 설정 변경 */
     public void setConfig(String targetMode,
                           int investAmountKrw, int maxPositions,
-                          double trailingStopPct, int timeCutDays, double indexDropBlockPct) {
+                          double trailingStopPct, int timeCutDays, double indexDropBlockPct,
+                          int bollingerMaxPositions) {
         String mode = targetMode != null ? targetMode : tradingMode;
         updateSettings(mode, getSettings(mode).paused(),
-                investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct);
+                investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct, bollingerMaxPositions);
     }
 
     /** Backward-compat: active 모드 설정 변경 */
     public void setConfig(int investAmountKrw, int maxPositions,
                           double trailingStopPct, int timeCutDays, double indexDropBlockPct) {
-        setConfig(null, investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct);
+        setConfig(null, investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct,
+                getActiveSettings().bollingerMaxPositions());
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
 
     private void updateSettings(String mode, boolean paused,
                                 int investAmountKrw, int maxPositions,
-                                double trailingStopPct, int timeCutDays, double indexDropBlockPct) {
+                                double trailingStopPct, int timeCutDays, double indexDropBlockPct,
+                                int bollingerMaxPositions) {
         ModeSettings updated = new ModeSettings(paused, investAmountKrw, maxPositions,
-                trailingStopPct, timeCutDays, indexDropBlockPct);
+                trailingStopPct, timeCutDays, indexDropBlockPct, bollingerMaxPositions);
         if ("real".equals(mode)) {
             realSettings = updated;
         } else {
@@ -153,13 +160,16 @@ public class AdminConfigStore {
     }
 
     private ModeSettings loadModeSettings(JsonNode node, ModeSettings def) {
-        boolean paused = node.has("paused")           ? node.get("paused").asBoolean(def.paused())                       : def.paused();
-        int invest     = node.has("investAmountKrw")  ? node.get("investAmountKrw").asInt(def.investAmountKrw())          : def.investAmountKrw();
-        int maxPos     = node.has("maxPositions")     ? node.get("maxPositions").asInt(def.maxPositions())                : def.maxPositions();
-        double ts      = node.has("trailingStopPct")  ? node.get("trailingStopPct").asDouble(def.trailingStopPct())       : def.trailingStopPct();
-        int tc         = node.has("timeCutDays")      ? node.get("timeCutDays").asInt(def.timeCutDays())                  : def.timeCutDays();
-        double idx     = node.has("indexDropBlockPct")? node.get("indexDropBlockPct").asDouble(def.indexDropBlockPct())   : def.indexDropBlockPct();
-        return new ModeSettings(paused, invest, maxPos, ts, tc, idx);
+        boolean paused   = node.has("paused")               ? node.get("paused").asBoolean(def.paused())                     : def.paused();
+        int invest       = node.has("investAmountKrw")      ? node.get("investAmountKrw").asInt(def.investAmountKrw())        : def.investAmountKrw();
+        int maxPos       = node.has("maxPositions")         ? node.get("maxPositions").asInt(def.maxPositions())              : def.maxPositions();
+        double ts        = node.has("trailingStopPct")      ? node.get("trailingStopPct").asDouble(def.trailingStopPct())     : def.trailingStopPct();
+        int tc           = node.has("timeCutDays")          ? node.get("timeCutDays").asInt(def.timeCutDays())                : def.timeCutDays();
+        double idx       = node.has("indexDropBlockPct")    ? node.get("indexDropBlockPct").asDouble(def.indexDropBlockPct()) : def.indexDropBlockPct();
+        int bollinger    = node.has("bollingerMaxPositions")
+                ? node.get("bollingerMaxPositions").asInt(def.bollingerMaxPositions())
+                : Math.max(1, maxPos / 2);
+        return new ModeSettings(paused, invest, maxPos, ts, tc, idx, bollinger);
     }
 
     public record Snapshot(String tradingMode, ModeSettings paper, ModeSettings real) {}

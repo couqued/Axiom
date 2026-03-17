@@ -39,7 +39,14 @@ export const getEnrichedPortfolio = () =>
   request('/api/strategy/portfolio')
 
 // 계좌 잔고
-export const getBalance = () => request('/api/portfolio/balance')
+export const getBalance = () =>
+  request('/api/portfolio/balance').then(r => ({
+    totalAsset:   r.totalBalance   ?? 0,
+    cash:         r.cashBalance    ?? 0,
+    totalPnl:     r.profitLoss     ?? 0,
+    totalPnlRate: r.profitLossRate ?? 0,
+    mock:         r.mock,
+  }))
 
 // 시장 상태 조회
 export const getMarketState = () => request('/api/strategy/market-state')
@@ -48,9 +55,13 @@ export const getMarketState = () => request('/api/strategy/market-state')
 export const refreshMarketState = () =>
   request('/api/strategy/refresh-market-state', { method: 'POST' })
 
-// 전략 즉시 실행
+// 전략 즉시 실행 (백그라운드 시작, 202 반환)
 export const runStrategy = () =>
   request('/api/strategy/run', { method: 'POST' })
+
+// 수동 실행 상태 폴링
+export const getRunStatus = () =>
+  request('/api/strategy/run-status')
 
 // 관리자 — 현재 상태 조회
 export const getAdminStatus = () =>

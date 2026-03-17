@@ -65,6 +65,9 @@ public class StrategyEngine {
     /** 모드별 당일 실행 이력: "paper"|"real" → List<RunRecord> */
     private final Map<String, List<RunRecord>> todayRunsByMode = new ConcurrentHashMap<>();
     private volatile LocalDate lastRunDate = null;
+    /** 수동 즉시 실행 상태 */
+    private volatile boolean manualRunning = false;
+    private volatile String lastManualRunMessage = null;
 
     @PostConstruct
     public void init() {
@@ -83,6 +86,30 @@ public class StrategyEngine {
 
     public LocalDateTime getLastEvalAt() { return lastEvalAt; }
 
+    public boolean isManualRunning() { return manualRunning; }
+    public String getLastManualRunMessage() { return lastManualRunMessage; }
+
+    /** 수동 실행 — 즉시 반환, 백그라운드에서 run() 실행 */
+    public void runAsync() {
+        if (manualRunning) return;
+        manualRunning = true;
+        lastManualRunMessage = null;
+        CompletableFuture.runAsync(() -> {
+            try {
+                RunResult result = run();
+                lastManualRunMessage = result.paused()
+                        ? "매매 중단 상태 — 전략 실행 스킵"
+                        : String.format("종목 %d개 평가 완료 — 매수 %d건, 매도 %d건",
+                                result.evaluated(), result.bought(), result.sold());
+            } catch (Exception e) {
+                lastManualRunMessage = "실행 오류: " + e.getMessage();
+                log.error("[Engine] 수동 실행 오류", e);
+            } finally {
+                manualRunning = false;
+            }
+        });
+    }
+
     public List<RunRecord> getTodayRuns() {
         String mode = adminConfigStore.getTradingMode();
         List<RunRecord> runs = todayRunsByMode.get(mode);
@@ -97,9 +124,12 @@ public class StrategyEngine {
         String mode = adminConfigStore.getTradingMode();
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
         Map<String, Integer> stages = strategyStateStore.loadAllBuyStages(mode);
+        Map<String, String> tags = strategyStateStore.loadAllEntryTags(mode);
         positions.forEach(p -> {
             Integer s = stages.get(p.getTicker());
             if (s != null) p.withBuyStage(s);
+            String tag = tags.get(p.getTicker());
+            if (tag != null) p.withEntryTag(tag);
         });
         return positions;
     }
@@ -146,16 +176,32 @@ public class StrategyEngine {
 
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
         Map<String, Integer> stages = strategyStateStore.loadAllBuyStages(tradingMode);
+        Map<String, String> entryTags = strategyStateStore.loadAllEntryTags(tradingMode);
         positions.forEach(p -> {
             Integer s = stages.get(p.getTicker());
             if (s != null) p.withBuyStage(s);
+            String tag = entryTags.get(p.getTicker());
+            if (tag != null) p.withEntryTag(tag);
         });
 
-        int[] boughtThisRun      = {0};
-        int[] soldThisRun        = {0};
-        int[] errorsThisRun      = {0};
-        int[] warnSkipsThisRun   = {0};
-        int[] maxPosSkipsThisRun = {0};
+        int bollingerMaxPositions = adminConfigStore.getBollingerMaxPositions();
+        int trendMaxPositions     = maxPositions - bollingerMaxPositions;
+
+        long bollingerHeld = positions.stream()
+                .filter(p -> "rsi-bollinger".equals(p.getEntryTag())).count();
+        long trendHeld     = positions.stream()
+                .filter(p -> p.getEntryTag() != null
+                        && List.of("golden-cross", "volatility-breakout").contains(p.getEntryTag())).count();
+
+        int[] boughtThisRun           = {0};
+        int[] soldThisRun             = {0};
+        int[] errorsThisRun           = {0};
+        int[] warnSkipsThisRun        = {0};
+        int[] maxPosSkipsThisRun      = {0};
+        int[] extremeFearBuysThisRun  = {0};
+        int[] boughtBollingerThisRun  = {0};
+        int[] boughtTrendThisRun      = {0};
+        final int EXTREME_FEAR_EXTRA_SLOTS = 2;
         List<TradeRecord> boughtList  = new ArrayList<>();
         List<TradeRecord> soldList    = new ArrayList<>();
         List<SkipRecord>  skippedList = new ArrayList<>();
@@ -226,28 +272,88 @@ public class StrategyEngine {
         Map<String, String> candidateResultMap = new java.util.LinkedHashMap<>();
 
         for (BuyCandidate candidate : buyQueue) {
-            int effectivePositions = positions.size() + boughtThisRun[0];
-            if (effectivePositions >= maxPositions) {
-                log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
-                        effectivePositions, maxPositions, candidate.signal().getTicker());
-                recordSkipped(candidate.signal(), marketState, "MAX_POSITIONS");
-                maxPosSkipsThisRun[0]++;
-                skippedList.add(new SkipRecord(
-                        candidate.signal().getTicker(), candidate.signal().getStockName(), "최대보유"));
-                candidateResultMap.put(candidate.signal().getTicker(), "한도초과");
-                continue;
+            // 2차 매수(물타기) 여부 확인 — stage=1 보유 중 + 신호 stage=2
+            String candidateTicker = candidate.signal().getTicker();
+            int newStage = candidate.signal().getBuyStage() != null ? candidate.signal().getBuyStage() : 2;
+            boolean isSecondaryBuy = newStage == 2 && positions.stream()
+                    .anyMatch(p -> p.getTicker().equals(candidateTicker)
+                            && (p.getBuyStage() != null ? p.getBuyStage() : 2) == 1);
+
+            boolean isExtremeFearBypass = candidate.signal().getScore() >= 80
+                    && (marketState == MarketState.BEARISH || indexBlocked);
+
+            if (!isSecondaryBuy) {
+                int effectivePositions = positions.size() + boughtThisRun[0];
+                if (effectivePositions >= maxPositions) {
+                    if (isExtremeFearBypass && extremeFearBuysThisRun[0] < EXTREME_FEAR_EXTRA_SLOTS) {
+                        log.info("[Engine] 극단공포 bypass — maxPositions({}) 초과 허용 ({}/{}슬롯) ticker: {}",
+                                maxPositions, extremeFearBuysThisRun[0] + 1, EXTREME_FEAR_EXTRA_SLOTS, candidateTicker);
+                    } else {
+                        log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
+                                effectivePositions, maxPositions, candidateTicker);
+                        recordSkipped(candidate.signal(), marketState, "MAX_POSITIONS");
+                        maxPosSkipsThisRun[0]++;
+                        skippedList.add(new SkipRecord(candidateTicker, candidate.signal().getStockName(), "최대보유"));
+                        candidateResultMap.put(candidateTicker, "한도초과");
+                        continue;
+                    }
+                }
+
+                // 그룹별 슬롯 체크 (EXTREME_FEAR bypass 시 그룹 체크도 우회)
+                if (!isExtremeFearBypass) {
+                    String strategyName = candidate.signal().getStrategyName();
+                    boolean isBollinger = "rsi-bollinger".equals(strategyName);
+                    if (isBollinger) {
+                        long bollingerUsed = bollingerHeld + boughtBollingerThisRun[0];
+                        if (bollingerUsed >= bollingerMaxPositions) {
+                            log.info("[Engine] 볼린저 그룹 슬롯 한도 도달 ({}/{}) — 스킵 ticker: {}",
+                                    bollingerUsed, bollingerMaxPositions, candidateTicker);
+                            recordSkipped(candidate.signal(), marketState, "GROUP_LIMIT");
+                            maxPosSkipsThisRun[0]++;
+                            skippedList.add(new SkipRecord(candidateTicker, candidate.signal().getStockName(), "그룹한도(볼린저)"));
+                            candidateResultMap.put(candidateTicker, "한도초과");
+                            continue;
+                        }
+                    } else {
+                        long trendUsed = trendHeld + boughtTrendThisRun[0];
+                        if (trendUsed >= trendMaxPositions) {
+                            log.info("[Engine] 추세 그룹 슬롯 한도 도달 ({}/{}) — 스킵 ticker: {}",
+                                    trendUsed, trendMaxPositions, candidateTicker);
+                            recordSkipped(candidate.signal(), marketState, "GROUP_LIMIT");
+                            maxPosSkipsThisRun[0]++;
+                            skippedList.add(new SkipRecord(candidateTicker, candidate.signal().getStockName(), "그룹한도(추세)"));
+                            candidateResultMap.put(candidateTicker, "한도초과");
+                            continue;
+                        }
+                    }
+                }
+            } else {
+                log.info("[Engine] 2차 매수(물타기) — maxPositions 제한 스킵 ticker: {}", candidateTicker);
             }
 
             boolean traded = handleSignal(candidate.signal(), positions, marketState.name());
             if (traded) {
-                boughtThisRun[0]++;
+                if (!isSecondaryBuy) {
+                    boughtThisRun[0]++;
+                    if (isExtremeFearBypass && (positions.size() + boughtThisRun[0] - 1) >= maxPositions) {
+                        extremeFearBuysThisRun[0]++;
+                    }
+                    // 그룹 카운터 갱신
+                    if ("rsi-bollinger".equals(candidate.signal().getStrategyName())) {
+                        boughtBollingerThisRun[0]++;
+                    } else {
+                        boughtTrendThisRun[0]++;
+                    }
+                }
+                // entryTag 항상 전략명으로 저장
+                strategyStateStore.saveEntryTag(candidateTicker, candidate.signal().getStrategyName(), tradingMode);
                 boughtList.add(new TradeRecord(
-                        candidate.signal().getTicker(),
+                        candidateTicker,
                         candidate.signal().getStockName(),
                         candidate.signal().getPrice()));
-                candidateResultMap.put(candidate.signal().getTicker(), "매수");
+                candidateResultMap.put(candidateTicker, "매수");
             } else {
-                candidateResultMap.put(candidate.signal().getTicker(), "예산부족");
+                candidateResultMap.put(candidateTicker, "예산부족");
             }
         }
 
@@ -309,6 +415,7 @@ public class StrategyEngine {
         List<CandleDto> historical = marketClient.getCandles(ticker, candleDays);
         if (historical.isEmpty()) {
             log.warn("[Engine] 캔들 데이터 없음 — ticker: {}", ticker);
+            skippedList.add(new SkipRecord(ticker, priceData.getStockName(), "캔들없음"));
             return Optional.empty();
         }
 
@@ -331,6 +438,9 @@ public class StrategyEngine {
             if (allCandles.size() < strategy.minimumCandles()) {
                 log.warn("[Engine] 캔들 부족 — strategy: {}, 필요: {}, 실제: {}",
                         strategy.getName(), strategy.minimumCandles(), allCandles.size());
+                if (skippedList.stream().noneMatch(s -> s.ticker().equals(ticker) && "캔들부족".equals(s.reason()))) {
+                    skippedList.add(new SkipRecord(ticker, priceData.getStockName(), "캔들부족"));
+                }
                 continue;
             }
 
@@ -394,8 +504,16 @@ public class StrategyEngine {
                         // 통과
                     } else {
                         log.info("[Engine] 이미 보유 중(Stage {}) — BUY 스킵 ticker: {}", currentStage, ticker);
+                        skippedList.add(new SkipRecord(signal.getTicker(), signal.getStockName(), "이미보유"));
                         continue;
                     }
+                }
+
+                // stage 2 신호인데 stage 1 포지션이 없으면 스킵 (RSI 단독 신규 매수 방지)
+                if (signal.getBuyStage() != null && signal.getBuyStage() == 2 && existing.isEmpty()) {
+                    log.info("[Engine] 2차 매수 신호이나 1차 포지션 없음 — BUY 스킵 ticker: {}", ticker);
+                    skippedList.add(new SkipRecord(signal.getTicker(), signal.getStockName(), "2차신호"));
+                    continue;
                 }
 
                 if (bestBuy == null || signal.getScore() > bestBuy.score()) {
@@ -486,6 +604,7 @@ public class StrategyEngine {
                     String tradingMode = adminConfigStore.getTradingMode();
                     timeCutService.clearBuy(signal.getTicker());
                     strategyStateStore.removeBuyStage(signal.getTicker(), tradingMode);
+                    strategyStateStore.removeEntryTag(signal.getTicker(), tradingMode);
                 }
                 yield r;
             }
@@ -565,10 +684,11 @@ public class StrategyEngine {
                 List<CandleDto> all = new ArrayList<>(candles);
                 all.add(liveCandle);
 
-                if (state == MarketState.SIDEWAYS) {
+                if (state == MarketState.SIDEWAYS || state == MarketState.BEARISH) {
                     SignalGapDto gap = calcRsiBollingerGap(ticker, price.getStockName(), all);
                     if (gap != null) gaps.add(gap);
                 } else {
+                    // BULLISH: 변동성돌파 + 골든크로스
                     SignalGapDto volGap = calcVolBreakoutGap(ticker, price.getStockName(), all);
                     if (volGap != null) gaps.add(volGap);
                     SignalGapDto gcGap = calcGoldenCrossGap(ticker, price.getStockName(), all);
@@ -583,11 +703,13 @@ public class StrategyEngine {
             }
         }
 
-        gaps.sort(Comparator.comparingDouble(SignalGapDto::gapPct));
+        gaps.sort(Comparator.comparingDouble(SignalGapDto::score).reversed()
+                .thenComparingDouble(SignalGapDto::gapPct));
         List<SignalGapDto> result = new ArrayList<>();
-        for (int i = 0; i < Math.min(topN, gaps.size()); i++) {
+        int rank = 1;
+        for (int i = 0; i < gaps.size() && result.size() < topN; i++) {
             SignalGapDto g = gaps.get(i);
-            result.add(new SignalGapDto(i + 1, g.ticker(), g.stockName(), g.strategy(),
+            result.add(new SignalGapDto(rank++, g.ticker(), g.stockName(), g.strategy(),
                     g.currentPrice(), g.threshold(), g.gapPct(), g.rsi(), g.bbUpper(), g.score(), g.detail()));
         }
         return result;
@@ -625,9 +747,32 @@ public class StrategyEngine {
         if (rsi < 30.0) {
             rsiScore = Math.min((30.0 - rsi) / 30.0, 1.0) * 50;
         }
-        double expectedScore = (bbScore > 0 || rsiScore > 0) ? (bbScore + rsiScore) : 0;
 
-        double gapPct = (currentPrice - lowerBand) / currentPrice * 100;
+        double gapPct;
+        if (currentPrice < lowerBand && rsi >= 30.0) {
+            // 1차 만족 상태: RSI 30까지 남은 %를 gapPct로 사용 (정렬을 위해)
+            gapPct = (rsi - 30.0) / rsi * 100;
+        } else {
+            // 기본 상태: BB 하단까지 남은 %
+            gapPct = (currentPrice - lowerBand) / currentPrice * 100;
+        }
+
+        double expectedScore;
+        if (bbScore > 0) {
+            // 하단밴드 이탈 상태 — 베이스 50점 추가로 접근 중 종목과 구간 분리 (최소 51점, 최대 150점)
+            expectedScore = 50 + bbScore + rsiScore;
+        } else {
+            // 하단밴드 접근 중 — 20% 이내인 경우에만 근접도 점수 부여 (최대 50점)
+            double approachPct = gapPct; // currentPrice >= lowerBand 구간에서 gapPct와 동일
+            if (approachPct <= 20.0) {
+                double proximityScore = (20.0 - approachPct) / 20.0 * 30;  // 최대 30점
+                double rsiProxScore = rsi < 50.0 ? (50.0 - rsi) / 50.0 * 20 : 0;  // 최대 20점
+                expectedScore = proximityScore + rsiProxScore;
+            } else {
+                expectedScore = 0;  // 20% 초과 이격은 제외
+            }
+        }
+
         String detail = String.format("RSI=%.1f, 하단밴드=%.0f, 상단밴드=%.0f", rsi, lowerBand, upperBand);
         return new SignalGapDto(0, ticker, stockName, "rsi-bollinger",
                 currentPrice, lowerBand, gapPct, rsi, upperBand, expectedScore, detail);
@@ -647,9 +792,18 @@ public class StrategyEngine {
 
         double gapPct = (ma20 - ma5) / ma20 * 100;
         double currentPrice = candles.get(endIdx).getClosePrice().doubleValue();
-        String detail = String.format("MA5=%.0f, MA20=%.0f, 이격=%.2f%%", ma5, ma20, gapPct);
+
+        // 진입점수 = MA5/MA20 이격 강도(50점) + 거래량 비율(50점)
+        double maGapPct = (ma5 - ma20) / ma20 * 100; // 양수 = MA5가 MA20 상회
+        double maScore = maGapPct > 0 ? Math.min(maGapPct / 2.0, 1.0) * 50 : 0; // 2% 이격 = 50점
+        double avgVol = calcAvgVolume(candles, 20);
+        double volRatio = avgVol > 0 ? (double) candles.get(endIdx).getVolume() / avgVol : 0;
+        double volScore = Math.min(volRatio / 3.0, 1.0) * 50;
+        double score = maScore + volScore;
+
+        String detail = String.format("MA5=%.0f, MA20=%.0f, 이격=%.2f%%", ma5, ma20, maGapPct);
         return new SignalGapDto(0, ticker, stockName, "golden-cross",
-                currentPrice, ma20, gapPct, -1, 0, 0, detail);
+                currentPrice, ma20, gapPct, -1, 0, score, detail);
     }
 
     private SignalGapDto calcVolBreakoutGap(String ticker, String stockName, List<CandleDto> candles) {
@@ -662,9 +816,29 @@ public class StrategyEngine {
         double currentPrice = today.getClosePrice().doubleValue();
 
         double gapPct = (targetPrice - currentPrice) / currentPrice * 100;
-        String detail = String.format("목표가=%.0f, 현재=%.0f, Range=%.0f", targetPrice, currentPrice, range);
+
+        // 진입점수 = 거래량 비율(50점) + 목표가 근접도(50점)
+        double avgVol = calcAvgVolume(candles, 20);
+        double volRatio = avgVol > 0 ? (double) today.getVolume() / avgVol : 0;
+        double volScore = Math.min(volRatio / 3.0, 1.0) * 50;          // 3배 거래량 = 50점
+        double proximity = Math.max(0, (5.0 - Math.max(gapPct, 0)) / 5.0) * 50; // 5% 이내 = 0~50점
+        double score = volScore + proximity;
+
+        String detail = String.format("목표가=%.0f, Range=%.0f, 거래량비율=%.1fx", targetPrice, range, volRatio);
         return new SignalGapDto(0, ticker, stockName, "volatility-breakout",
-                currentPrice, targetPrice, gapPct, -1, 0, 0, detail);
+                currentPrice, targetPrice, gapPct, -1, 0, score, detail);
+    }
+
+    private double calcAvgVolume(List<CandleDto> candles, int period) {
+        int end = candles.size() - 1;
+        int start = Math.max(0, end - period);
+        double sum = 0;
+        int count = 0;
+        for (int i = start; i < end; i++) { // 당일 제외
+            sum += candles.get(i).getVolume();
+            count++;
+        }
+        return count > 0 ? sum / count : 0;
     }
 
     /** Wilder's Smoothed RSI(14) — StrategyEngine 내부용 */

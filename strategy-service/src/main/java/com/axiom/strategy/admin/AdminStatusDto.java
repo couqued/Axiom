@@ -13,7 +13,8 @@ public record AdminStatusDto(
             int maxPositions,
             double trailingStopPct,
             int timeCutDays,
-            double indexDropBlockPct
+            double indexDropBlockPct,
+            int bollingerMaxPositions
     ) {}
 
     /** 현재 활성 모드의 설정 반환 */

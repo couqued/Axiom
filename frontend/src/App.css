@@ -399,6 +399,7 @@
   border: 1px solid #2d2d3a;
   margin-bottom: 12px;
 }
+.strategy-control h3 { margin: 0 0 10px; }
 .control-buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -434,6 +435,7 @@
   border: 1px solid #2d2d3a;
   margin-bottom: 12px;
 }
+.config-card h3 { margin: 0 0 10px; }
 .config-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1160,6 +1162,43 @@ body {
 .index-drop-status.blocked, .index-drop-badge.blocked { color: #ef4444; }
 .index-drop-status.ok,      .index-drop-badge.ok      { color: #22c55e; }
 .index-drop-status.checking,.index-drop-badge.checking { color: #f59e0b; }
+
+/* ── 매수 신호 근접도 테이블 ─────────────────────────────────────────── */
+
+.signal-table { margin-top: 12px; }
+
+.signal-table-header {
+  display: grid;
+  grid-template-columns: 40px 2fr 1.5fr 1fr 1.5fr 1.2fr;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #2d2d3a;
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.signal-table-row {
+  display: grid;
+  grid-template-columns: 40px 2fr 1.5fr 1fr 1.5fr 1.2fr;
+  padding: 12px 0;
+  border-bottom: 1px solid #1e2030;
+  align-items: center;
+  text-align: center;
+  font-size: 13px;
+}
+
+.signal-col-left { text-align: left; }
+.signal-stock-name { font-weight: bold; }
+.signal-stock-price { font-size: 11px; color: #e0e0e0; }
+.signal-strategy-badge { font-size: 9px; }
+
+.signal-empty {
+  text-align: center;
+  color: #555;
+  font-size: 13px;
+  padding: 20px 0;
+}
 
 /* ── 시간별 실행 이력 ─────────────────────────────────────────────────── */
 

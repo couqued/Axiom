@@ -19,6 +19,7 @@ public class StrategyStateStore {
     private static final String BUY_DATE     = "BUY_DATE";
     private static final String TODAY_BOUGHT = "TODAY_BOUGHT";
     private static final String BUY_STAGE    = "BUY_STAGE";
+    private static final String ENTRY_TAG    = "ENTRY_TAG";
 
     private final StrategyStateRepository repo;
 
@@ -40,6 +41,24 @@ public class StrategyStateStore {
                 .collect(Collectors.toMap(
                         StrategyState::getTicker,
                         s -> Integer.parseInt(s.getValue())));
+    }
+
+    // ── ENTRY_TAG ────────────────────────────────────────────────────────────
+
+    @Transactional
+    public void saveEntryTag(String ticker, String tag, String tradingMode) {
+        upsert(tagType(tradingMode), ticker, tag);
+    }
+
+    @Transactional
+    public void removeEntryTag(String ticker, String tradingMode) {
+        repo.deleteByTypeAndTicker(tagType(tradingMode), ticker);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, String> loadAllEntryTags(String tradingMode) {
+        return repo.findAllByType(tagType(tradingMode)).stream()
+                .collect(Collectors.toMap(StrategyState::getTicker, StrategyState::getValue));
     }
 
     // ── PEAK_PRICE ──────────────────────────────────────────────────────────
@@ -115,6 +134,10 @@ public class StrategyStateStore {
 
     private String stageType(String tradingMode) {
         return BUY_STAGE + "_" + (tradingMode != null ? tradingMode : "paper");
+    }
+
+    private String tagType(String tradingMode) {
+        return ENTRY_TAG + "_" + (tradingMode != null ? tradingMode : "paper");
     }
 
     private void upsert(String type, String ticker, String value) {

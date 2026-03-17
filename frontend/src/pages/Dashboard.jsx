@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getEnrichedPortfolio, getBalance, getTrailingStopStatus, getTimeCutStatus, getStockPrice } from '../api/stockApi'
+import { getEnrichedPortfolio, getBalance, getTrailingStopStatus, getTimeCutStatus, getStockPrice, getAdminStatus } from '../api/stockApi'
 
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState([])
@@ -7,33 +7,36 @@ export default function Dashboard() {
   const [tsStatus, setTsStatus] = useState({})
   const [tcStatus, setTcStatus] = useState({})
   const [prices, setPositionsPrices] = useState({})
+  const [adminConfig, setAdminConfig] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   const fetchData = useCallback(async () => {
     try {
-      const [p, b, ts, tc] = await Promise.all([
-        getEnrichedPortfolio(),
-        getBalance(),
+      const [p, b, ts, tc, cfg] = await Promise.all([
+        getEnrichedPortfolio().catch(() => []),
+        getBalance().catch(() => ({ totalAsset: 0, cash: 0, totalPnl: 0, totalPnlRate: 0 })),
         getTrailingStopStatus().catch(() => ({})),
         getTimeCutStatus().catch(() => ({})),
+        getAdminStatus().catch(() => null),
       ])
-      setPortfolio(p)
+      setPortfolio(p || [])
       setBalance(b)
-      setTsStatus(ts)
-      setTcStatus(tc)
+      setTsStatus(ts || {})
+      setTcStatus(tc || {})
+      setAdminConfig(cfg)
 
-      // 실시간 가격 업데이트
-      if (p.length > 0) {
-        const pricePromises = p.map(item => getStockPrice(item.ticker).catch(() => null))
-        const results = await Promise.all(pricePromises)
+      if (p && p.length > 0) {
+        const results = await Promise.all(p.map(item => getStockPrice(item.ticker).catch(() => null)))
         const priceMap = {}
         results.forEach((res, i) => {
           if (res) priceMap[p[i].ticker] = res.currentPrice
         })
         setPositionsPrices(priceMap)
       }
+      setLastUpdated(new Date())
     } catch (e) {
-      console.error('Data fetch failed', e)
+      console.error('Dashboard data fetch failed', e)
     } finally {
       setLoading(false)
     }
@@ -45,50 +48,67 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [fetchData])
 
-  const TAG_STYLES = {
-    1: { label: 'BB 1차 매수', color: '#ffd966', border: '1px solid #7a6419' },
-    2: { label: 'BB+RSI 완료', color: '#ffd966', border: '1px solid #7a6419' },
-    'extended': { label: '연장 홀딩', color: '#ce93d8', border: '1px solid #6a1b9a' },
+  const getStageTag = (stage) => {
+    if (stage === 1) return { label: 'BB 1차 매수', color: '#ffd966', border: '1px solid #7a6419' }
+    return { label: 'BB+RSI 완료', color: '#4caf50', border: '1px solid #1b5e20' }
   }
 
-  if (loading && portfolio.length === 0) return <div className="loading">로딩 중...</div>
+  const EXTENDED_STYLE = { color: '#ce93d8', border: '1px solid #6a1b9a' }
+
+  if (loading && portfolio.length === 0) {
+    return <div className="loading">데이터를 불러오는 중입니다...</div>
+  }
 
   return (
     <div className="page">
-      <h2>대시보드</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+        <h2 style={{ margin: 0 }}>대시보드</h2>
+        {adminConfig && (
+          <span className={`mode-badge ${adminConfig.tradingMode ?? 'paper'}`}>
+            {(adminConfig.tradingMode ?? 'paper') === 'paper' ? '모의투자' : '운영'}
+          </span>
+        )}
+      </div>
 
       <div className="balance-card">
         <div className="balance-row">
           <span>총 자산</span>
-          <strong>{balance.totalAsset.toLocaleString()}원</strong>
+          <strong>{Number(balance.totalAsset || 0).toLocaleString()}원</strong>
         </div>
         <div className="balance-row">
           <span>현금</span>
-          <span>{balance.cash.toLocaleString()}원</span>
+          <span>{Number(balance.cash || 0).toLocaleString()}원</span>
         </div>
         <div className="balance-row">
           <span>손익</span>
-          <span className={balance.totalPnl >= 0 ? 'up' : 'down'}>
-            {balance.totalPnl >= 0 ? '+' : ''}{balance.totalPnl.toLocaleString()}원 
-            ({balance.totalPnlRate >= 0 ? '+' : ''}{balance.totalPnlRate.toFixed(2)}%)
+          <span className={(balance.totalPnl || 0) >= 0 ? 'up' : 'down'}>
+            {(balance.totalPnl || 0) >= 0 ? '+' : ''}{Number(balance.totalPnl || 0).toLocaleString()}원 
+            ({(balance.totalPnlRate || 0) >= 0 ? '+' : ''}{Number(balance.totalPnlRate || 0).toFixed(2)}%)
           </span>
         </div>
       </div>
 
-      <h3>보유 종목 상태</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
+        <h3 style={{ margin: 0 }}>보유 종목</h3>
+        {lastUpdated && (
+          <span className="section-note" style={{ margin: 0 }}>
+            {lastUpdated.toLocaleTimeString()} 갱신
+          </span>
+        )}
+      </div>
+
       <div className="holding-list">
         {portfolio.length === 0 ? (
-          <p className="empty">보유 종목이 없습니다.</p>
+          <p className="empty">보유 중인 종목이 없습니다.</p>
         ) : (
           portfolio.map(item => {
             const ts = tsStatus[item.ticker]
             const tc = tcStatus[item.ticker]
-            const currentPrice = prices[item.ticker] || item.avgPrice
-            const pnl = (currentPrice - item.avgPrice) * item.quantity
-            const pnlRate = ((currentPrice - item.avgPrice) / item.avgPrice) * 100
+            const currentPrice = prices[item.ticker] || item.avgPrice || 0
+            const pnl = (currentPrice - (item.avgPrice || 0)) * (item.quantity || 0)
+            const pnlRate = item.avgPrice ? ((currentPrice - item.avgPrice) / item.avgPrice) * 100 : 0
             
-            const buyStage = item.buyStage || 2;
-            const stageStyle = TAG_STYLES[buyStage];
+            const stageInfo = getStageTag(item.buyStage);
             const isExtended = tc && tc.remaining === 0 && tc.elapsed >= 3;
 
             return (
@@ -99,15 +119,31 @@ export default function Dashboard() {
                 </div>
                 
                 <div className="holding-tags">
-                  <span className="history-tag" style={stageStyle}>{stageStyle.label}</span>
+                  <span className="history-tag" style={{ color: stageInfo.color, border: stageInfo.border, background: 'none' }}>
+                    {stageInfo.label}
+                  </span>
                   {isExtended && (
-                    <span className="history-tag" style={TAG_STYLES['extended']}>연장 홀딩</span>
+                    <span className="history-tag" style={{ color: EXTENDED_STYLE.color, border: EXTENDED_STYLE.border, background: 'none' }}>
+                      연장 홀딩
+                    </span>
+                  )}
+                  {item.entryTag === 'EXTREME_FEAR' && (
+                    <span style={{
+                      background: '#ff4d4d22',
+                      color: '#ff4d4d',
+                      border: '1px solid #ff4d4d',
+                      borderRadius: '4px',
+                      padding: '1px 6px',
+                      fontSize: '10px',
+                      fontWeight: 'bold',
+                      marginLeft: '4px',
+                    }}>극단공포</span>
                   )}
                 </div>
 
                 <div className="holding-row">
                   <span className="holding-meta">
-                    {item.quantity}주 · 평단 {Number(item.avgPrice).toLocaleString()}원 · 현재 {Number(currentPrice).toLocaleString()}원
+                    {item.quantity}주 · 평단 {Number(item.avgPrice || 0).toLocaleString()}원 · 현재 {Number(currentPrice).toLocaleString()}원
                     {ts && ts.peakPrice && (
                       <span style={{ color: '#7dccff', marginLeft: 4 }}>
                         · 고점 {Number(ts.peakPrice).toLocaleString()}원
@@ -117,18 +153,18 @@ export default function Dashboard() {
                 </div>
 
                 <div className={`holding-pnl ${pnl >= 0 ? 'up' : 'down'}`}>
-                  <span>평가손익 {pnl >= 0 ? '+' : ''}{pnl.toLocaleString()}원</span>
+                  <span>평가손익 {pnl >= 0 ? '+' : ''}{Math.round(pnl).toLocaleString()}원</span>
                   <span className="holding-rate">수익률 {pnlRate >= 0 ? '+' : ''}{pnlRate.toFixed(1)}% {pnl >= 0 ? '▲' : '▼'}</span>
                 </div>
 
                 {ts && (
                   <div className="holding-risk ts">
-                    {buyStage === 1 ? (
+                    {item.buyStage === 1 ? (
                       <span style={{ color: '#888' }}>트레일링 스탑: 2차 매수 대기 중</span>
                     ) : (
                       <>
-                        트레일링 스탑: {Number(ts.stopPrice).toLocaleString()}원
-                        <span className="risk-remain"> │ {(currentPrice - ts.stopPrice).toLocaleString()}원({((currentPrice - ts.stopPrice) / currentPrice * 100).toFixed(1)}%) 남음</span>
+                        트레일링 스탑: {Number(ts.stopPrice || 0).toLocaleString()}원
+                        <span className="risk-remain"> │ {Math.max(0, currentPrice - (ts.stopPrice || 0)).toLocaleString()}원({currentPrice > 0 ? ((currentPrice - ts.stopPrice) / currentPrice * 100).toFixed(1) : 0}%) 남음</span>
                       </>
                     )}
                   </div>

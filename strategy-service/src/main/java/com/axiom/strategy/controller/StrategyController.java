@@ -24,15 +24,23 @@ public class StrategyController {
     private final StrategyEngine strategyEngine;
     private final MarketStateService marketStateService;
 
-    /** 전략 즉시 실행 (테스트 / 수동 트리거용) */
+    /** 전략 즉시 실행 — 백그라운드 시작 후 즉시 202 반환 */
     @PostMapping("/run")
     public ResponseEntity<Map<String, String>> run() {
-        StrategyEngine.RunResult result = strategyEngine.run();
-        String message = result.paused()
-                ? "매매 중단 상태 — 전략 실행 스킵"
-                : String.format("종목 %d개 평가 완료 — 매수 %d건, 매도 %d건",
-                        result.evaluated(), result.bought(), result.sold());
-        return ResponseEntity.ok(Map.of("result", message));
+        if (strategyEngine.isManualRunning()) {
+            return ResponseEntity.accepted().body(Map.of("status", "running", "message", "이미 실행 중입니다"));
+        }
+        strategyEngine.runAsync();
+        return ResponseEntity.accepted().body(Map.of("status", "started", "message", "전략 실행 시작"));
+    }
+
+    /** 수동 실행 상태 폴링 */
+    @GetMapping("/run-status")
+    public ResponseEntity<Map<String, Object>> runStatus() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("running", strategyEngine.isManualRunning());
+        body.put("message", strategyEngine.getLastManualRunMessage());
+        return ResponseEntity.ok(body);
     }
 
     /** 현재 시장 상태 + 지수 스냅샷 조회 */

@@ -16,24 +16,26 @@ export default function Admin({ onClose, onConfigUpdated }) {
 
   // 입력 값: paper/real 각각 독립
   const [fields, setFields] = useState({
-    paper: { invest: '', maxPos: '', trailing: '', timeCut: '', indexDrop: '' },
-    real:  { invest: '', maxPos: '', trailing: '', timeCut: '', indexDrop: '' },
+    paper: { invest: '', maxPos: '', bollingerMaxPos: '', trailing: '', timeCut: '', indexDrop: '' },
+    real:  { invest: '', maxPos: '', bollingerMaxPos: '', trailing: '', timeCut: '', indexDrop: '' },
   })
 
   const initFields = (s) => ({
     paper: {
-      invest:   String(s.paper.investAmountKrw),
-      maxPos:   String(s.paper.maxPositions),
-      trailing: String(s.paper.trailingStopPct),
-      timeCut:  String(s.paper.timeCutDays),
-      indexDrop: String(s.paper.indexDropBlockPct),
+      invest:          String(s.paper.investAmountKrw),
+      maxPos:          String(s.paper.maxPositions),
+      bollingerMaxPos: String(s.paper.bollingerMaxPositions),
+      trailing:        String(s.paper.trailingStopPct),
+      timeCut:         String(s.paper.timeCutDays),
+      indexDrop:       String(s.paper.indexDropBlockPct),
     },
     real: {
-      invest:   String(s.real.investAmountKrw),
-      maxPos:   String(s.real.maxPositions),
-      trailing: String(s.real.trailingStopPct),
-      timeCut:  String(s.real.timeCutDays),
-      indexDrop: String(s.real.indexDropBlockPct),
+      invest:          String(s.real.investAmountKrw),
+      maxPos:          String(s.real.maxPositions),
+      bollingerMaxPos: String(s.real.bollingerMaxPositions),
+      trailing:        String(s.real.trailingStopPct),
+      timeCut:         String(s.real.timeCutDays),
+      indexDrop:       String(s.real.indexDropBlockPct),
     },
   })
 
@@ -92,15 +94,20 @@ export default function Admin({ onClose, onConfigUpdated }) {
   // 특정 모드의 설정 저장
   const handleSaveConfig = async () => {
     const f = fields[settingsTab]
-    const invest    = parseInt(f.invest, 10)
-    const maxPos    = parseInt(f.maxPos, 10)
-    const trailing  = parseFloat(f.trailing)
-    const timeCut   = parseInt(f.timeCut, 10)
-    const indexDrop = parseFloat(f.indexDrop)
+    const invest          = parseInt(f.invest, 10)
+    const maxPos          = parseInt(f.maxPos, 10)
+    const bollingerMaxPos = parseInt(f.bollingerMaxPos, 10)
+    const trailing        = parseFloat(f.trailing)
+    const timeCut         = parseInt(f.timeCut, 10)
+    const indexDrop       = parseFloat(f.indexDrop)
     if (isNaN(invest) || invest < 1 || isNaN(maxPos) || maxPos < 1
         || isNaN(trailing) || trailing <= 0 || isNaN(timeCut) || timeCut < 1
         || isNaN(indexDrop) || indexDrop < 0) {
       setSaveMsg({ ok: false, text: '올바른 숫자를 입력하세요' })
+      return
+    }
+    if (isNaN(bollingerMaxPos) || bollingerMaxPos < 1 || bollingerMaxPos >= maxPos) {
+      setSaveMsg({ ok: false, text: '볼린저 슬롯 수는 1 이상, 최대종목 수 미만이어야 합니다' })
       return
     }
     setSaving(true)
@@ -110,6 +117,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
         targetMode: settingsTab,
         investAmountKrw: invest,
         maxPositions: maxPos,
+        bollingerMaxPositions: bollingerMaxPos,
         trailingStopPct: trailing,
         timeCutDays: timeCut,
         indexDropBlockPct: indexDrop,
@@ -243,11 +251,12 @@ export default function Admin({ onClose, onConfigUpdated }) {
 
               <div className="admin-fields">
                 {[
-                  { key: 'invest',    label: '1회 매수금액 (원)', min: 1, max: undefined, step: 1 },
-                  { key: 'maxPos',    label: '최대 보유 종목 수', min: 1, max: 20, step: 1 },
-                  { key: 'trailing',  label: '트레일링 스탑 (%)', min: 0.1, max: 30, step: 0.1 },
-                  { key: 'timeCut',   label: '타임 컷 (거래일)', min: 1, max: 30, step: 1 },
-                  { key: 'indexDrop', label: '지수 하락 매수차단 (%)', min: 0, max: 10, step: 0.1 },
+                  { key: 'invest',          label: '1회 매수금액 (원)',       min: 1,   max: undefined, step: 1 },
+                  { key: 'maxPos',          label: '최대 보유 종목 수',        min: 1,   max: 20,        step: 1 },
+                  { key: 'bollingerMaxPos', label: '볼린저밴드 전용 슬롯',     min: 1,   max: 19,        step: 1 },
+                  { key: 'trailing',        label: '트레일링 스탑 (%)',        min: 0.1, max: 30,        step: 0.1 },
+                  { key: 'timeCut',         label: '타임 컷 (거래일)',         min: 1,   max: 30,        step: 1 },
+                  { key: 'indexDrop',       label: '지수 하락 매수차단 (%)',   min: 0,   max: 10,        step: 0.1 },
                 ].map(({ key, label, min, max, step }) => (
                   <label key={key} className="admin-field">
                     <span className="admin-field-label">{label}</span>
@@ -262,6 +271,12 @@ export default function Admin({ onClose, onConfigUpdated }) {
                     />
                   </label>
                 ))}
+                {(() => {
+                  const maxPos = parseInt(fields[settingsTab].maxPos, 10)
+                  const bollinger = parseInt(fields[settingsTab].bollingerMaxPos, 10)
+                  const trend = (!isNaN(maxPos) && !isNaN(bollinger)) ? maxPos - bollinger : '—'
+                  return <p className="admin-note" style={{ marginTop: '4px' }}>추세전략 슬롯: {trend}개 (자동)</p>
+                })()}
                 {!status.indexDropCheckedToday
                   ? <p className="index-drop-status checking">⏳ 체크 전 (09:20 이후 확인)</p>
                   : status.indexDropBlockedToday

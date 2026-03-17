@@ -9,6 +9,28 @@
 
 ### Added
 
+**전략 그룹별 포지션 슬롯 분리 (bollingerMaxPositions)**
+
+- `maxPositions`를 두 그룹으로 분리하여 횡보장/상승장 전환 시 슬롯 경합 문제 해결
+  - **볼린저 그룹** (`bollingerMaxPositions`개): `rsi-bollinger` 전용
+  - **추세 그룹** (`maxPositions - bollingerMaxPositions`개): `volatility-breakout` + `golden-cross` 전용
+- `AdminConfigStore.ModeSettings`에 `bollingerMaxPositions` 필드 추가 (기본값: `maxPositions / 2`, 최소 1)
+- `admin-config.json`에 `bollingerMaxPositions` 저장/로드 — 필드 없으면 `maxPositions / 2` 폴백
+- `AdminConfigDto` / `AdminStatusDto.ModeSettingsDto`에 필드 추가
+- `StrategyEngine`: 매 사이클 시작 시 `entryTag`로 그룹별 보유 수 집계 후 슬롯 한도 체크
+  - EXTREME_FEAR bypass 매수는 그룹 체크도 우회 (기존 동작 유지)
+  - 레거시 포지션 (`entryTag=null`): 총량 체크만 적용, 그룹 체크 미적용
+- `entryTag`를 EXTREME_FEAR 전용에서 **모든 매수**에 전략명으로 저장하도록 확장
+- Admin UI: "볼린저밴드 전용 슬롯" 입력 필드 추가 + 추세 슬롯 자동 계산 안내 표시
+- Strategy UI: 전략 설정 섹션에 슬롯 배분 표시 (볼린저 N / 추세 N)
+- Strategy UI: BUY 신호 랭킹 헤더에 최종 실행 시각 표시 (매수 신호 근접도와 동일 패턴)
+
+**UI 개선**
+
+- 전략 제어 · 전략 설정 영역 h3 상단 여백 축소 (다른 섹션과 통일)
+
+---
+
 **모의투자 ↔ 운영 모드 런타임 전환**
 
 - Admin UI에서 거래 모드(모의투자/운영) 런타임 전환 기능 추가

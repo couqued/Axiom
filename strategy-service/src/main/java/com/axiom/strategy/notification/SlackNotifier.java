@@ -190,19 +190,21 @@ public class SlackNotifier {
      */
     public void sendHourlySummary(int hour, int runCount, int evaluated,
                                    int bought, int sold, int errors,
-                                   List<String> boughtTickers, List<String> skipSummary,
+                                   List<String> boughtTickers, List<String> skipLines,
                                    long noSignalCount) {
         String boughtLine = boughtTickers.isEmpty() ? ""
                 : "\n> 매수종목: " + String.join(", ", boughtTickers);
-        String skipLine = skipSummary.isEmpty()
+        String skipBlock = skipLines.isEmpty()
                 ? (noSignalCount == runCount ? "\n> BUY 신호 없음" : "")
-                : "\n> 스킵: " + String.join(", ", skipSummary);
+                : skipLines.stream()
+                        .map(line -> "\n> " + line)
+                        .collect(Collectors.joining());
         String text = String.format(
                 "🕐 *[시간별 요약 %02d:xx]* 실행 %d회  |  평가 %d개\n" +
                 "> 매수: %d건  ·  매도: %d건  ·  오류: %d건" +
                 "%s%s",
                 hour, runCount, evaluated, bought, sold, errors,
-                boughtLine, skipLine
+                boughtLine, skipBlock
         );
         send(text);
     }

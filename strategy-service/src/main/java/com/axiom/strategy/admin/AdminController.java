@@ -52,18 +52,20 @@ public class AdminController {
 
         // 설정 변경 요청 처리 (tradingMode만 있고 설정 필드가 없으면 스킵)
         boolean hasSettingFields = dto.investAmountKrw() != null || dto.maxPositions() != null
-                || dto.trailingStopPct() != null || dto.timeCutDays() != null || dto.indexDropBlockPct() != null;
+                || dto.trailingStopPct() != null || dto.timeCutDays() != null || dto.indexDropBlockPct() != null
+                || dto.bollingerMaxPositions() != null;
         if (hasSettingFields) {
             String target = dto.targetMode(); // null이면 active 모드
             AdminConfigStore.ModeSettings current = adminConfigStore.getSettings(
                     target != null ? target : adminConfigStore.getTradingMode());
 
-            int    newInvest  = dto.investAmountKrw()  != null ? dto.investAmountKrw()  : current.investAmountKrw();
-            int    newMaxPos  = dto.maxPositions()      != null ? dto.maxPositions()      : current.maxPositions();
-            double newTs      = dto.trailingStopPct()   != null ? dto.trailingStopPct()   : current.trailingStopPct();
-            int    newTc      = dto.timeCutDays()       != null ? dto.timeCutDays()       : current.timeCutDays();
-            double newIdx     = dto.indexDropBlockPct() != null ? dto.indexDropBlockPct() : current.indexDropBlockPct();
-            adminConfigStore.setConfig(target, newInvest, newMaxPos, newTs, newTc, newIdx);
+            int    newInvest    = dto.investAmountKrw()       != null ? dto.investAmountKrw()       : current.investAmountKrw();
+            int    newMaxPos    = dto.maxPositions()           != null ? dto.maxPositions()           : current.maxPositions();
+            double newTs        = dto.trailingStopPct()        != null ? dto.trailingStopPct()        : current.trailingStopPct();
+            int    newTc        = dto.timeCutDays()            != null ? dto.timeCutDays()            : current.timeCutDays();
+            double newIdx       = dto.indexDropBlockPct()      != null ? dto.indexDropBlockPct()      : current.indexDropBlockPct();
+            int    newBollinger = dto.bollingerMaxPositions()  != null ? dto.bollingerMaxPositions()  : current.bollingerMaxPositions();
+            adminConfigStore.setConfig(target, newInvest, newMaxPos, newTs, newTc, newIdx, newBollinger);
         }
 
         return ResponseEntity.ok(currentStatus());
@@ -88,10 +90,12 @@ public class AdminController {
                 adminConfigStore.getTradingMode(),
                 new AdminStatusDto.ModeSettingsDto(
                         paper.paused(), paper.investAmountKrw(), paper.maxPositions(),
-                        paper.trailingStopPct(), paper.timeCutDays(), paper.indexDropBlockPct()),
+                        paper.trailingStopPct(), paper.timeCutDays(), paper.indexDropBlockPct(),
+                        paper.bollingerMaxPositions()),
                 new AdminStatusDto.ModeSettingsDto(
                         real.paused(), real.investAmountKrw(), real.maxPositions(),
-                        real.trailingStopPct(), real.timeCutDays(), real.indexDropBlockPct()),
+                        real.trailingStopPct(), real.timeCutDays(), real.indexDropBlockPct(),
+                        real.bollingerMaxPositions()),
                 marketStateService.isIndexDropBlockedToday(),
                 marketStateService.isIndexDropCheckedToday()
         );
