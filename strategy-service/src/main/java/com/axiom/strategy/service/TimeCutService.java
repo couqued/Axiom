@@ -80,6 +80,11 @@ public class TimeCutService {
         stateStore.removeBuyDate(ticker, mode);
     }
 
+    public void clearBuy(String ticker, String mode) {
+        buyDates.remove(key(mode, ticker));
+        stateStore.removeBuyDate(ticker, mode);
+    }
+
     public void checkAndCut(String ticker, BigDecimal currentPrice, List<PortfolioItemDto> positions, BigDecimal ma5) {
         StrategyConfig.TimeCutConfig config = strategyConfig.getTimeCut();
         if (!config.isEnabled()) return;
@@ -100,6 +105,16 @@ public class TimeCutService {
         }
 
         PortfolioItemDto position = positionOpt.get();
+
+        // entryTag가 applicableStrategies에 없으면 잘못 등록된 BUY_DATE 제거 후 스킵
+        String entryTag = position.getEntryTag();
+        if (entryTag != null && !config.getApplicableStrategies().contains(entryTag)) {
+            log.info("[TimeCut][{}] 전략 미해당 BUY_DATE 제거 — ticker: {}, entryTag: {}", mode, ticker, entryTag);
+            buyDates.remove(mapKey);
+            stateStore.removeBuyDate(ticker, mode);
+            return;
+        }
+
         int elapsed = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now(TradingCalendar.KST));
         int maxDays  = adminConfigStore.getTimeCutDays();
 

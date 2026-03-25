@@ -11,6 +11,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -66,6 +67,22 @@ public class MarketClient {
         } catch (Exception e) {
             log.warn("[MarketClient] screened-tickers 조회 실패 — yml fallback 사용: {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * market-service에서 ticker → 종목명 맵 조회.
+     */
+    public Map<String, String> getTickerNames() {
+        try {
+            return marketWebClient.get()
+                    .uri("/internal/ticker-names")
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, String>>() {})
+                    .block();
+        } catch (Exception e) {
+            log.warn("[MarketClient] ticker-names 조회 실패: {}", e.getMessage());
+            return Map.of();
         }
     }
 

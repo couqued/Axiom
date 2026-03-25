@@ -8,12 +8,14 @@ import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.notification.SlackNotifier.OvernightExitItem;
+import com.axiom.strategy.service.DailySellBlockService;
 import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.util.TradingCalendar;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -39,6 +41,8 @@ public class ForceExitScheduler {
     private final PortfolioClient portfolioClient;
     private final OrderClient orderClient;
     private final SlackNotifier slackNotifier;
+    private final DailySellBlockService dailySellBlockService;
+    private final AdminConfigStore adminConfigStore;
 
     @Scheduled(cron = "0 20 15 * * MON-FRI", zone = "Asia/Seoul")
     public void forceExit() {
@@ -47,7 +51,8 @@ public class ForceExitScheduler {
             return;
         }
 
-        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought();
+        String mode = adminConfigStore.getTradingMode();
+        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought(mode);
         LocalDate today = LocalDate.now(TradingCalendar.KST);
 
         // 오늘 변동성 돌파로 매수한 종목
@@ -65,13 +70,18 @@ public class ForceExitScheduler {
 
         // portfolio-service에서 실제 보유 종목 확인 후 매도
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
+        Set<String> heldTickers = positions.stream()
+                .map(PortfolioItemDto::getTicker)
+                .collect(Collectors.toSet());
+
+        Set<String> soldOk = new java.util.HashSet<>();
         for (PortfolioItemDto position : positions) {
             if (!boughtToday.contains(position.getTicker())) continue;
 
             OrderRequest sellOrder = OrderRequest.builder()
                     .ticker(position.getTicker())
                     .quantity(position.getQuantity())
-                    .price(position.getAvgPrice()) // 시장가 매도 (평균단가 참조)
+                    .price(null)  // 시장가 매도 (price=null → OrderService → KIS ORD_DVSN=01)
                     .closeReason("FORCE_EXIT")
                     .build();
 
@@ -82,10 +92,24 @@ public class ForceExitScheduler {
             slackNotifier.sendForceExit(
                     position.getTicker(), position.getStockName(),
                     position.getQuantity(), position.getAvgPrice(), result.success());
+
+            if (result.success()) {
+                soldOk.add(position.getTicker());
+                dailySellBlockService.markSoldToday(position.getTicker());
+            } else {
+                log.warn("[ForceExit] 매도 실패 — {} todayBought 유지 (9:05 오버나이트 청산 위임)",
+                        position.getTicker());
+            }
         }
 
-        // 오늘 매수 기록 정리
-        boughtToday.forEach(volatilityBreakoutStrategy::removeTodayBought);
+        // 매도 성공 종목만 todayBought에서 제거 (실패 종목은 유지 → 오버나이트 청산 재시도)
+        // 포트폴리오에도 없는 종목(이미 타 경로로 청산됨)도 함께 정리
+        boughtToday.stream()
+                .filter(ticker -> soldOk.contains(ticker) || !heldTickers.contains(ticker))
+                .forEach(ticker -> volatilityBreakoutStrategy.removeTodayBought(ticker, mode));
+
+        // 당일 강제청산 실행 완료 — 이후 신규 매수 차단
+        volatilityBreakoutStrategy.markForceExited(mode);
     }
 
     /**
@@ -112,7 +136,8 @@ public class ForceExitScheduler {
             return;
         }
 
-        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought();
+        String mode = adminConfigStore.getTradingMode();
+        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought(mode);
         LocalDate today = LocalDate.now(TradingCalendar.KST);
 
         // ① 전 거래일 매수 후 미청산 후보 추출
@@ -151,7 +176,11 @@ public class ForceExitScheduler {
 
         // ③ 실제 보유 중인 종목만 매도
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
+        Set<String> heldSet = positions.stream()
+                .map(PortfolioItemDto::getTicker)
+                .collect(Collectors.toSet());
         List<OvernightExitItem> exitItems = new ArrayList<>();
+        Set<String> soldOk = new java.util.HashSet<>();
         boolean anyFailed = false;
         for (PortfolioItemDto position : positions) {
             if (!confirmedTickers.contains(position.getTicker())) continue;
@@ -159,7 +188,7 @@ public class ForceExitScheduler {
             OrderRequest sellOrder = OrderRequest.builder()
                     .ticker(position.getTicker())
                     .quantity(position.getQuantity())
-                    .price(position.getAvgPrice())
+                    .price(null)  // 시장가 매도 (price=null → OrderService → KIS ORD_DVSN=01)
                     .closeReason("FORCE_EXIT")
                     .build();
 
@@ -170,12 +199,19 @@ public class ForceExitScheduler {
             exitItems.add(new OvernightExitItem(
                     position.getTicker(), position.getStockName(),
                     position.getAvgPrice(), position.getAvgPrice(), result.success()));
-            if (!result.success()) anyFailed = true;
+            if (result.success()) {
+                soldOk.add(position.getTicker());
+            } else {
+                anyFailed = true;
+            }
         }
 
         slackNotifier.sendOvernightExitResult(true, exitItems.size(), anyFailed, exitItems);
 
-        // ④ 처리된 항목 todayBought에서 제거
-        confirmedTickers.forEach(volatilityBreakoutStrategy::removeTodayBought);
+        // ④ 매도 성공 종목 + 포트폴리오 미보유(이미 청산) 종목만 todayBought에서 제거
+        // 매도 실패 종목은 유지 → 다음날 09:05 재시도
+        confirmedTickers.stream()
+                .filter(t -> soldOk.contains(t) || !heldSet.contains(t))
+                .forEach(t -> volatilityBreakoutStrategy.removeTodayBought(t, mode));
     }
 }

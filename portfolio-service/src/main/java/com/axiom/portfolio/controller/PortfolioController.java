@@ -34,6 +34,15 @@ public class PortfolioController {
         return ResponseEntity.ok(kisAccountApiService.getBalance());
     }
 
+    // 관리자용 티커별 삭제: DELETE /api/portfolio/admin/by-ticker?ticker=006360&mode=real
+    @DeleteMapping("/api/portfolio/admin/by-ticker")
+    public ResponseEntity<Void> deleteByTicker(
+            @RequestParam String ticker,
+            @RequestParam String mode) {
+        portfolioService.deletePosition(ticker, mode);
+        return ResponseEntity.noContent().build();
+    }
+
     // 내부 엔드포인트: 거래 모드 변경 전파
     @PatchMapping("/internal/trading-mode")
     public ResponseEntity<Void> updateTradingMode(@RequestBody Map<String, String> body) {

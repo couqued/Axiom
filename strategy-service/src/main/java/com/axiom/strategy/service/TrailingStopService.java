@@ -98,7 +98,9 @@ public class TrailingStopService {
         PortfolioItemDto position = positionOpt.get();
         if (position.getBuyStage() != null && position.getBuyStage() == 1) {
             log.debug("[TrailingStop][{}] {} | 1차 매수 상태 — 트레일링 스탑 보류", mode, ticker);
-            // 1차 매수 중에는 고점 갱신도 하지 않음 (평단가가 바뀔 수 있으므로)
+            // 1차 매수 중에도 고점은 추적 (2차 매수 완료 후 정확한 고점 데이터 유지)
+            peakPrices.merge(mapKey, currentPrice, (old, cur) ->
+                    cur.compareTo(old) > 0 ? cur : old);
             return;
         }
 
@@ -139,6 +141,11 @@ public class TrailingStopService {
                 log.warn("[TrailingStop] 매도 최종 실패 — {} peakPrices 유지, 다음 주기(1분 후)에 재시도", ticker);
             }
         }
+    }
+
+    public void removePeak(String ticker, String mode) {
+        peakPrices.remove(key(mode, ticker));
+        stateStore.removePeakPrice(ticker, mode);
     }
 
     public Map<String, TrailingStopStatusDto> getStatus() {

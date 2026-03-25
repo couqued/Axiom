@@ -109,3 +109,17 @@ export const getSignalGap = () => request('/api/strategy/signal-gap')
 // 매수 신호 근접도 백그라운드 계산 트리거
 export const triggerSignalGapRefresh = (top = 10) =>
   request(`/api/strategy/signal-gap/refresh?top=${top}`, { method: 'POST' })
+
+// 관리자 — 수동 청산 (tickers: string[])
+export const manualExit = (tickers) =>
+  request('/api/strategy/admin/manual-exit', {
+    method: 'POST',
+    body: JSON.stringify({ tickers }),
+  })
+
+// 관리자 — MTS/외부 매도 처리 (포트폴리오 DB + 전략 상태 정리, KIS 주문 없음)
+export const markSold = (tickers) =>
+  request('/api/strategy/admin/mark-sold', {
+    method: 'POST',
+    body: JSON.stringify({ tickers }),
+  })

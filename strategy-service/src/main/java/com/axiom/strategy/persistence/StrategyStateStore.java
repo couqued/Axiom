@@ -104,18 +104,18 @@ public class StrategyStateStore {
     // ── TODAY_BOUGHT ─────────────────────────────────────────────────────────
 
     @Transactional
-    public void saveTodayBought(String ticker, LocalDate date) {
-        upsert(TODAY_BOUGHT, ticker, date.toString());
+    public void saveTodayBought(String ticker, LocalDate date, String mode) {
+        upsert(todayBoughtType(mode), ticker, date.toString());
     }
 
     @Transactional
-    public void removeTodayBought(String ticker) {
-        repo.deleteByTypeAndTicker(TODAY_BOUGHT, ticker);
+    public void removeTodayBought(String ticker, String mode) {
+        repo.deleteByTypeAndTicker(todayBoughtType(mode), ticker);
     }
 
     @Transactional(readOnly = true)
-    public Map<String, LocalDate> loadAllTodayBought() {
-        return repo.findAllByType(TODAY_BOUGHT).stream()
+    public Map<String, LocalDate> loadAllTodayBought(String mode) {
+        return repo.findAllByType(todayBoughtType(mode)).stream()
                 .collect(Collectors.toMap(
                         StrategyState::getTicker,
                         s -> LocalDate.parse(s.getValue())));
@@ -138,6 +138,10 @@ public class StrategyStateStore {
 
     private String tagType(String tradingMode) {
         return ENTRY_TAG + "_" + (tradingMode != null ? tradingMode : "paper");
+    }
+
+    private String todayBoughtType(String mode) {
+        return TODAY_BOUGHT + "_" + (mode != null ? mode : "paper");
     }
 
     private void upsert(String type, String ticker, String value) {

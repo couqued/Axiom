@@ -71,6 +71,15 @@ public class PortfolioService {
     }
 
     /**
+     * 관리자 정리용 — 포지션 강제 삭제
+     */
+    @Transactional
+    public void deletePosition(String ticker, String mode) {
+        portfolioRepository.deleteByTickerAndTradingMode(ticker, mode);
+        log.info("포트폴리오 강제 삭제 [{}] - ticker: {}", mode, ticker);
+    }
+
+    /**
      * 매도 체결 시 포트폴리오 수량 차감
      */
     @Transactional

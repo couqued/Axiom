@@ -1,5 +1,6 @@
 package com.axiom.strategy.notification;
 
+import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.engine.StrategyEngine;
 import lombok.extern.slf4j.Slf4j;
@@ -7,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -23,6 +25,9 @@ public class SlackNotifier {
 
     @Value("${slack.enabled:false}")
     private boolean enabled;
+
+    @Autowired
+    private AdminConfigStore adminConfigStore;
 
     /**
      * 전략 신호 + 주문 결과 단일 메시지.
@@ -245,6 +250,9 @@ public class SlackNotifier {
     }
 
     private void send(String text) {
+        if ("paper".equals(adminConfigStore.getTradingMode())) {
+            text = text.replaceFirst("^(\\S+\\s+)", "$1*[모의]* ");
+        }
         if (!enabled) {
             log.info("[Slack-DISABLED] {}", text);
             return;

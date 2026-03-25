@@ -9,4 +9,5 @@ public interface TradeOrderRepository extends JpaRepository<TradeOrder, Long> {
     List<TradeOrder> findAllByOrderByCreatedAtDesc();
     List<TradeOrder> findByTickerOrderByCreatedAtDesc(String ticker);
     List<TradeOrder> findByTradingModeOrderByCreatedAtDesc(String tradingMode);
+    void deleteByTickerAndTradingMode(String ticker, String tradingMode);
 }

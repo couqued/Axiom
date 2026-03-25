@@ -48,9 +48,12 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [fetchData])
 
-  const getStageTag = (stage) => {
-    if (stage === 1) return { label: 'BB 1차 매수', color: '#ffd966', border: '1px solid #7a6419' }
-    return { label: 'BB+RSI 완료', color: '#4caf50', border: '1px solid #1b5e20' }
+  const getStrategyTag = (entryTag, stage) => {
+    const style = { color: '#4caf50', border: '1px solid #1b5e20' }
+    if (entryTag === 'volatility-breakout') return { ...style, label: '변동성돌파' }
+    if (entryTag === 'golden-cross')        return { ...style, label: '골든크로스' }
+    if (stage === 1)                        return { ...style, label: 'BB 1차 매수' }
+    return { ...style, label: 'BB+RSI 완료' }
   }
 
   const EXTENDED_STYLE = { color: '#ce93d8', border: '1px solid #6a1b9a' }
@@ -108,7 +111,7 @@ export default function Dashboard() {
             const pnl = (currentPrice - (item.avgPrice || 0)) * (item.quantity || 0)
             const pnlRate = item.avgPrice ? ((currentPrice - item.avgPrice) / item.avgPrice) * 100 : 0
             
-            const stageInfo = getStageTag(item.buyStage);
+            const stageInfo = getStrategyTag(item.entryTag, item.buyStage);
             const isExtended = tc && tc.remaining === 0 && tc.elapsed >= 3;
 
             return (
@@ -144,7 +147,7 @@ export default function Dashboard() {
                 <div className="holding-row">
                   <span className="holding-meta">
                     {item.quantity}주 · 평단 {Number(item.avgPrice || 0).toLocaleString()}원 · 현재 {Number(currentPrice).toLocaleString()}원
-                    {ts && ts.peakPrice && (
+                    {ts && ts.peakPrice && item.buyStage !== 1 && (
                       <span style={{ color: '#7dccff', marginLeft: 4 }}>
                         · 고점 {Number(ts.peakPrice).toLocaleString()}원
                       </span>

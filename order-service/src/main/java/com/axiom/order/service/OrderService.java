@@ -67,7 +67,6 @@ public class OrderService {
             order.setStatus(TradeOrder.OrderStatus.FAILED);
             orderRepository.save(order);
             log.error("주문 실패 - orderId: {}, error: {}", order.getId(), e.getMessage());
-            throw new RuntimeException("주문 처리 중 오류가 발생했습니다: " + e.getMessage());
         }
 
         return OrderResponse.from(order);
@@ -92,5 +91,10 @@ public class OrderService {
         return orderRepository.findByTickerOrderByCreatedAtDesc(ticker).stream()
                 .map(OrderResponse::from)
                 .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public void deleteByTicker(String ticker, String mode) {
+        orderRepository.deleteByTickerAndTradingMode(ticker, mode);
     }
 }

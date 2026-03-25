@@ -16,5 +16,6 @@ public class OrderSummaryDto {
     private String orderType;     // "BUY" | "SELL"
     private String strategyName;
     private String status;        // "FILLED" | "FAILED" | ...
+    private String tradingMode;
     private LocalDateTime createdAt;
 }

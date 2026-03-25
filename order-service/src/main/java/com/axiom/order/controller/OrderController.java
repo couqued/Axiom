@@ -63,6 +63,15 @@ public class OrderController {
         return ResponseEntity.ok(orderService.getOrdersByTicker(ticker));
     }
 
+    // 관리자용 티커별 삭제: DELETE /api/orders/admin/by-ticker?ticker=006360&mode=real
+    @DeleteMapping("/api/orders/admin/by-ticker")
+    public ResponseEntity<Void> deleteByTicker(
+            @RequestParam String ticker,
+            @RequestParam String mode) {
+        orderService.deleteByTicker(ticker, mode);
+        return ResponseEntity.noContent().build();
+    }
+
     // 내부 엔드포인트: 거래 모드 변경 전파
     @PatchMapping("/internal/trading-mode")
     public ResponseEntity<Void> updateTradingMode(@RequestBody Map<String, String> body) {

@@ -2,10 +2,12 @@ package com.axiom.strategy.admin;
 
 public record AdminStatusDto(
         String tradingMode,
+        String strategyMode,
         ModeSettingsDto paper,
         ModeSettingsDto real,
         boolean indexDropBlockedToday,
-        boolean indexDropCheckedToday
+        boolean indexDropCheckedToday,
+        java.util.Map<String, com.axiom.strategy.service.BollingerReserveService.ReservationEntry> bollingerReservations
 ) {
     public record ModeSettingsDto(
             boolean paused,
@@ -14,7 +16,9 @@ public record AdminStatusDto(
             double trailingStopPct,
             int timeCutDays,
             double indexDropBlockPct,
-            int bollingerMaxPositions
+            int volatilityBreakoutDailyLimit,
+            int goldenCrossDailyLimit,
+            int bollingerDailyLimit
     ) {}
 
     /** 현재 활성 모드의 설정 반환 */

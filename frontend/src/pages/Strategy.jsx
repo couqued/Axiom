@@ -1,10 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getMarketState, refreshMarketState, runStrategy, getRunStatus, getPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getSignalGap, triggerSignalGapRefresh } from '../api/stockApi'
+import { getMarketState, refreshMarketState, runStrategy, getRunStatus, getEnrichedPortfolio, getAdminStatus, getTrailingStopStatus, getTimeCutStatus, getEvalRanking, getStockPrice, getSignalGap, triggerSignalGapRefresh } from '../api/stockApi'
 
 const STRATEGY_KO = {
   'golden-cross': '골든크로스',
   'rsi-bollinger': 'RSI+볼린저',
   'volatility-breakout': '변동성 돌파',
+}
+
+const STRATEGY_TAG_STYLE = { color: '#4caf50', border: '1px solid #1b5e20' }
+
+function getPositionStrategyTag(entryTag, buyStage) {
+  if (entryTag === 'volatility-breakout') return { ...STRATEGY_TAG_STYLE, label: '변동성돌파' }
+  if (entryTag === 'golden-cross')        return { ...STRATEGY_TAG_STYLE, label: '골든크로스' }
+  if (buyStage === 1)                     return { ...STRATEGY_TAG_STYLE, label: 'BB 1차 매수' }
+  return { ...STRATEGY_TAG_STYLE, label: 'BB+RSI 완료' }
 }
 
 const STRATEGIES_BY_STATE = {
@@ -41,7 +50,7 @@ export default function Strategy({ liveAdminConfig }) {
     try {
       const [ms, p, cfg, ts, tc, rank, gap] = await Promise.all([
         getMarketState(),
-        getPortfolio(),
+        getEnrichedPortfolio(),
         getAdminStatus(),
         getTrailingStopStatus().catch(() => ({})),
         getTimeCutStatus().catch(() => ({})),
@@ -198,6 +207,14 @@ export default function Strategy({ liveAdminConfig }) {
             return (
               <div key={p.ticker} className="position-detail-card">
                 <div className="position-detail-header"><span className="holding-name">{p.stockName}</span><span className="holding-ticker">{p.ticker}</span></div>
+                {(() => {
+                  const tag = getPositionStrategyTag(p.entryTag, p.buyStage)
+                  return (
+                    <span className="history-tag" style={{ color: tag.color, border: tag.border, background: 'none', display: 'inline-block', marginBottom: '4px' }}>
+                      {tag.label}
+                    </span>
+                  )
+                })()}
                 <div className="position-detail-row">{p.quantity}주 · 평균 {Number(p.avgPrice).toLocaleString()}원</div>
                 <div className="position-detail-row secondary">투자금 {Number(p.totalInvest).toLocaleString()}원</div>
                 {ts && <div className="position-risk ts">트레일링 스탑: {Number(ts.stopPrice).toLocaleString()}원</div>}
@@ -319,7 +336,9 @@ export default function Strategy({ liveAdminConfig }) {
         <div className="config-grid">
           <div className="config-item"><span className="config-label">1회 매수금액</span><span className="config-value">{activeSettings ? activeSettings.investAmountKrw.toLocaleString() + '원' : '—'}</span></div>
           <div className="config-item"><span className="config-label">최대 보유 종목</span><span className="config-value">{activeSettings ? activeSettings.maxPositions + '종목' : '—'}</span></div>
-          <div className="config-item"><span className="config-label">슬롯 배분</span><span className="config-value">볼린저 {activeSettings?.bollingerMaxPositions ?? '—'} / 추세 {activeSettings ? (activeSettings.maxPositions ?? 0) - (activeSettings.bollingerMaxPositions ?? 0) : '—'}</span></div>
+          <div className="config-item"><span className="config-label">변동성돌파 일일한도</span><span className="config-value">{activeSettings ? (activeSettings.volatilityBreakoutDailyLimit === 0 ? '비활성' : activeSettings.volatilityBreakoutDailyLimit + '회') : '—'}</span></div>
+          <div className="config-item"><span className="config-label">골든크로스 일일한도</span><span className="config-value">{activeSettings ? (activeSettings.goldenCrossDailyLimit === 0 ? '비활성' : activeSettings.goldenCrossDailyLimit + '회') : '—'}</span></div>
+          <div className="config-item"><span className="config-label">볼린저밴드 일일한도</span><span className="config-value">{activeSettings ? (activeSettings.bollingerDailyLimit === 0 ? '비활성' : activeSettings.bollingerDailyLimit + '회') : '—'}</span></div>
           <div className="config-item"><span className="config-label">트레일링 스탑</span><span className="config-value">{activeSettings ? `고점 -${activeSettings.trailingStopPct}%` : '—'}</span></div>
           <div className="config-item"><span className="config-label">타임 컷</span><span className="config-value">{activeSettings ? activeSettings.timeCutDays + '거래일' : '—'}</span></div>
           <div className="config-item"><span className="config-label">지수 하락 매수차단</span><span className="config-value">

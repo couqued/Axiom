@@ -9,4 +9,5 @@ import java.util.Optional;
 public interface PortfolioRepository extends JpaRepository<Portfolio, Long> {
     Optional<Portfolio> findByTickerAndTradingMode(String ticker, String tradingMode);
     List<Portfolio> findByTradingMode(String tradingMode);
+    void deleteByTickerAndTradingMode(String ticker, String tradingMode);
 }

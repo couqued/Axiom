@@ -85,8 +85,11 @@ public class OrderClient {
                     .retrieve()
                     .bodyToMono(Map.class)
                     .block();
-            log.info("[OrderClient] 주문 완료 - path: {}, ticker: {}, response: {}",
-                    path, request.getTicker(), response);
+            if ("FAILED".equals(response.get("status"))) {
+                log.error("[OrderClient] 주문 실패 - path: {}, ticker: {}", path, request.getTicker());
+                return OrderResult.fail("KIS 주문 거부");
+            }
+            log.info("[OrderClient] 주문 완료 - path: {}, ticker: {}", path, request.getTicker());
             return OrderResult.ok();
         } catch (Exception e) {
             log.error("[OrderClient] 주문 실패 - path: {}, ticker: {}, error: {}",

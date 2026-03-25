@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getAdminStatus, pauseTrading, resumeTrading, updateAdminConfig } from '../api/stockApi'
+import { getAdminStatus, pauseTrading, resumeTrading, updateAdminConfig, manualExit, markSold } from '../api/stockApi'
 
 export default function Admin({ onClose, onConfigUpdated }) {
   const [status, setStatus] = useState(null)
@@ -11,31 +11,43 @@ export default function Admin({ onClose, onConfigUpdated }) {
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
 
+  const [exitTickers, setExitTickers] = useState('')
+  const [exitResult, setExitResult] = useState(null)
+  const [exiting, setExiting] = useState(false)
+
+  const [markTickers, setMarkTickers] = useState('')
+  const [markResult, setMarkResult] = useState(null)
+  const [marking, setMarking] = useState(false)
+
   // 설정 탭: 어떤 모드의 설정을 편집 중인지
   const [settingsTab, setSettingsTab] = useState('paper')
 
   // 입력 값: paper/real 각각 독립
   const [fields, setFields] = useState({
-    paper: { invest: '', maxPos: '', bollingerMaxPos: '', trailing: '', timeCut: '', indexDrop: '' },
-    real:  { invest: '', maxPos: '', bollingerMaxPos: '', trailing: '', timeCut: '', indexDrop: '' },
+    paper: { invest: '', maxPos: '', trailing: '', timeCut: '', indexDrop: '', volBreakoutDaily: '', goldenCrossDaily: '', bollingerDaily: '' },
+    real:  { invest: '', maxPos: '', trailing: '', timeCut: '', indexDrop: '', volBreakoutDaily: '', goldenCrossDaily: '', bollingerDaily: '' },
   })
 
   const initFields = (s) => ({
     paper: {
-      invest:          String(s.paper.investAmountKrw),
-      maxPos:          String(s.paper.maxPositions),
-      bollingerMaxPos: String(s.paper.bollingerMaxPositions),
-      trailing:        String(s.paper.trailingStopPct),
-      timeCut:         String(s.paper.timeCutDays),
-      indexDrop:       String(s.paper.indexDropBlockPct),
+      invest:           String(s.paper.investAmountKrw),
+      maxPos:           String(s.paper.maxPositions),
+      trailing:         String(s.paper.trailingStopPct),
+      timeCut:          String(s.paper.timeCutDays),
+      indexDrop:        String(s.paper.indexDropBlockPct),
+      volBreakoutDaily: String(s.paper.volatilityBreakoutDailyLimit),
+      goldenCrossDaily: String(s.paper.goldenCrossDailyLimit),
+      bollingerDaily:   String(s.paper.bollingerDailyLimit),
     },
     real: {
-      invest:          String(s.real.investAmountKrw),
-      maxPos:          String(s.real.maxPositions),
-      bollingerMaxPos: String(s.real.bollingerMaxPositions),
-      trailing:        String(s.real.trailingStopPct),
-      timeCut:         String(s.real.timeCutDays),
-      indexDrop:       String(s.real.indexDropBlockPct),
+      invest:           String(s.real.investAmountKrw),
+      maxPos:           String(s.real.maxPositions),
+      trailing:         String(s.real.trailingStopPct),
+      timeCut:          String(s.real.timeCutDays),
+      indexDrop:        String(s.real.indexDropBlockPct),
+      volBreakoutDaily: String(s.real.volatilityBreakoutDailyLimit),
+      goldenCrossDaily: String(s.real.goldenCrossDailyLimit),
+      bollingerDaily:   String(s.real.bollingerDailyLimit),
     },
   })
 
@@ -70,6 +82,17 @@ export default function Admin({ onClose, onConfigUpdated }) {
     }
   }
 
+  // 전략 선택 방식 변경
+  const handleStrategyModeChange = async (mode) => {
+    if (mode === status?.strategyMode) return
+    try {
+      const res = await updateAdminConfig({ strategyMode: mode })
+      setStatus(res)
+    } catch (e) {
+      setError('전략 모드 변경 실패: ' + e.message)
+    }
+  }
+
   // 거래 모드 전환
   const handleModeSwitch = async (newMode) => {
     if (newMode === status?.tradingMode) return
@@ -96,18 +119,20 @@ export default function Admin({ onClose, onConfigUpdated }) {
     const f = fields[settingsTab]
     const invest          = parseInt(f.invest, 10)
     const maxPos          = parseInt(f.maxPos, 10)
-    const bollingerMaxPos = parseInt(f.bollingerMaxPos, 10)
     const trailing        = parseFloat(f.trailing)
     const timeCut         = parseInt(f.timeCut, 10)
     const indexDrop       = parseFloat(f.indexDrop)
+    const volBreakoutDaily = parseInt(f.volBreakoutDaily, 10)
+    const goldenCrossDaily = parseInt(f.goldenCrossDaily, 10)
+    const bollingerDaily   = parseInt(f.bollingerDaily, 10)
     if (isNaN(invest) || invest < 1 || isNaN(maxPos) || maxPos < 1
         || isNaN(trailing) || trailing <= 0 || isNaN(timeCut) || timeCut < 1
         || isNaN(indexDrop) || indexDrop < 0) {
       setSaveMsg({ ok: false, text: '올바른 숫자를 입력하세요' })
       return
     }
-    if (isNaN(bollingerMaxPos) || bollingerMaxPos < 1 || bollingerMaxPos >= maxPos) {
-      setSaveMsg({ ok: false, text: '볼린저 슬롯 수는 1 이상, 최대종목 수 미만이어야 합니다' })
+    if (isNaN(volBreakoutDaily) || volBreakoutDaily < 0 || isNaN(goldenCrossDaily) || goldenCrossDaily < 0 || isNaN(bollingerDaily) || bollingerDaily < 0) {
+      setSaveMsg({ ok: false, text: '일일 한도는 0 이상의 숫자를 입력하세요' })
       return
     }
     setSaving(true)
@@ -117,10 +142,12 @@ export default function Admin({ onClose, onConfigUpdated }) {
         targetMode: settingsTab,
         investAmountKrw: invest,
         maxPositions: maxPos,
-        bollingerMaxPositions: bollingerMaxPos,
         trailingStopPct: trailing,
         timeCutDays: timeCut,
         indexDropBlockPct: indexDrop,
+        volatilityBreakoutDailyLimit: volBreakoutDaily,
+        goldenCrossDailyLimit: goldenCrossDaily,
+        bollingerDailyLimit: bollingerDaily,
       })
       setStatus(res)
       setSaveMsg({ ok: true, text: `[${settingsTab === 'paper' ? '모의투자' : '운영'}] 설정이 저장되었습니다` })
@@ -144,6 +171,40 @@ export default function Admin({ onClose, onConfigUpdated }) {
       setError('상태 변경 실패: ' + e.message)
     } finally {
       setToggling(false)
+    }
+  }
+
+  const handleMarkSold = async () => {
+    const tickers = markTickers.split(',').map(t => t.trim()).filter(Boolean)
+    if (!tickers.length) return
+    const ok = window.confirm(`${tickers.join(', ')} — MTS에서 직접 매도 완료된 종목입니다.\n포트폴리오 DB와 전략 상태를 정리하시겠습니까?\n(실제 매도 주문은 발생하지 않습니다)`)
+    if (!ok) return
+    setMarking(true)
+    setMarkResult(null)
+    try {
+      const res = await markSold(tickers)
+      setMarkResult(res)
+    } catch (e) {
+      setMarkResult({ error: e.message })
+    } finally {
+      setMarking(false)
+    }
+  }
+
+  const handleManualExit = async () => {
+    const tickers = exitTickers.split(',').map(t => t.trim()).filter(Boolean)
+    if (!tickers.length) return
+    const ok = window.confirm(`${tickers.join(', ')} 즉시 시장가 매도하시겠습니까?`)
+    if (!ok) return
+    setExiting(true)
+    setExitResult(null)
+    try {
+      const res = await manualExit(tickers)
+      setExitResult(res)
+    } catch (e) {
+      setExitResult({ error: e.message })
+    } finally {
+      setExiting(false)
     }
   }
 
@@ -183,6 +244,31 @@ export default function Admin({ onClose, onConfigUpdated }) {
                 </button>
               </div>
               {switching && <p className="admin-note">모드 전환 중...</p>}
+            </div>
+
+            {/* 전략 선택 방식 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">전략 선택 방식</h3>
+              <p className="admin-note">
+                시장상황별: BULLISH→추세전략, SIDEWAYS/BEARISH→볼린저RSI<br/>
+                전체동시: 시장상황 무관하게 3개 전략 모두 실행
+              </p>
+              <div className="mode-toggle-row">
+                <button
+                  className={`mode-toggle-btn ${status.strategyMode !== 'all-strategies' ? 'active' : ''}`}
+                  onClick={() => handleStrategyModeChange('market-based')}
+                  disabled={status.strategyMode !== 'all-strategies'}
+                >
+                  시장상황별 구분
+                </button>
+                <button
+                  className={`mode-toggle-btn ${status.strategyMode === 'all-strategies' ? 'active' : ''}`}
+                  onClick={() => handleStrategyModeChange('all-strategies')}
+                  disabled={status.strategyMode === 'all-strategies'}
+                >
+                  전체 전략 동시 실행
+                </button>
+              </div>
             </div>
 
             {/* 긴급 제어 (활성 모드) */}
@@ -251,12 +337,14 @@ export default function Admin({ onClose, onConfigUpdated }) {
 
               <div className="admin-fields">
                 {[
-                  { key: 'invest',          label: '1회 매수금액 (원)',       min: 1,   max: undefined, step: 1 },
-                  { key: 'maxPos',          label: '최대 보유 종목 수',        min: 1,   max: 20,        step: 1 },
-                  { key: 'bollingerMaxPos', label: '볼린저밴드 전용 슬롯',     min: 1,   max: 19,        step: 1 },
-                  { key: 'trailing',        label: '트레일링 스탑 (%)',        min: 0.1, max: 30,        step: 0.1 },
-                  { key: 'timeCut',         label: '타임 컷 (거래일)',         min: 1,   max: 30,        step: 1 },
-                  { key: 'indexDrop',       label: '지수 하락 매수차단 (%)',   min: 0,   max: 10,        step: 0.1 },
+                  { key: 'invest',           label: '1회 매수금액 (원)',              min: 1,   max: undefined, step: 1 },
+                  { key: 'maxPos',           label: '최대 보유 종목 수',               min: 1,   max: 20,        step: 1 },
+                  { key: 'trailing',         label: '트레일링 스탑 (%)',               min: 0.1, max: 30,        step: 0.1 },
+                  { key: 'timeCut',          label: '타임 컷 (거래일)',                min: 1,   max: 30,        step: 1 },
+                  { key: 'indexDrop',        label: '지수 하락 매수차단 (%)',          min: 0,   max: 10,        step: 0.1 },
+                  { key: 'volBreakoutDaily', label: '변동성돌파 일일 한도 (0=비활성)', min: 0,   max: 20,        step: 1 },
+                  { key: 'goldenCrossDaily', label: '골든크로스 일일 한도 (0=비활성)', min: 0,   max: 20,        step: 1 },
+                  { key: 'bollingerDaily',   label: '볼린저밴드 일일 한도 (0=비활성)', min: 0,   max: 20,        step: 1 },
                 ].map(({ key, label, min, max, step }) => (
                   <label key={key} className="admin-field">
                     <span className="admin-field-label">{label}</span>
@@ -271,12 +359,6 @@ export default function Admin({ onClose, onConfigUpdated }) {
                     />
                   </label>
                 ))}
-                {(() => {
-                  const maxPos = parseInt(fields[settingsTab].maxPos, 10)
-                  const bollinger = parseInt(fields[settingsTab].bollingerMaxPos, 10)
-                  const trend = (!isNaN(maxPos) && !isNaN(bollinger)) ? maxPos - bollinger : '—'
-                  return <p className="admin-note" style={{ marginTop: '4px' }}>추세전략 슬롯: {trend}개 (자동)</p>
-                })()}
                 {!status.indexDropCheckedToday
                   ? <p className="index-drop-status checking">⏳ 체크 전 (09:20 이후 확인)</p>
                   : status.indexDropBlockedToday
@@ -294,6 +376,94 @@ export default function Admin({ onClose, onConfigUpdated }) {
               {saveMsg && (
                 <p className={`result-msg ${saveMsg.ok ? 'success' : 'fail'}`}>{saveMsg.text}</p>
               )}
+            </div>
+
+            {/* 수동 청산 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">수동 청산</h3>
+              <p className="admin-note">종목코드를 쉼표로 구분하여 입력하면 즉시 시장가 매도합니다.<br/>매도 성공 시 todayBought 상태도 자동 정리됩니다.</p>
+              <input
+                type="text"
+                className="admin-input"
+                placeholder="예: 005930,293490,039200"
+                value={exitTickers}
+                onChange={e => setExitTickers(e.target.value)}
+                style={{ width: '100%', marginBottom: '8px' }}
+              />
+              <button
+                className="admin-toggle-btn pause"
+                disabled={exiting || !exitTickers.trim()}
+                onClick={handleManualExit}
+              >
+                {exiting ? '매도 중...' : '즉시 매도'}
+              </button>
+              {exitResult && (
+                <div style={{ marginTop: '8px' }}>
+                  {Object.entries(exitResult).map(([ticker, ok]) => (
+                    <p key={ticker} className={`result-msg ${ok ? 'success' : 'fail'}`}>
+                      {ticker}: {ok ? '매도 성공' : '매도 실패'}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* MTS/외부 매도 처리 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">외부 매도 처리 (MTS)</h3>
+              <p className="admin-note">MTS 또는 장외에서 직접 매도한 종목의 시스템 상태를 정리합니다.<br/>포트폴리오 DB에서 제거하고 전략 상태(todayBought, 트레일링스탑 등)를 초기화합니다.<br/>실제 매도 주문은 발생하지 않습니다.</p>
+              <input
+                type="text"
+                className="admin-input"
+                placeholder="예: 005930,293490,039200"
+                value={markTickers}
+                onChange={e => setMarkTickers(e.target.value)}
+                style={{ width: '100%', marginBottom: '8px' }}
+              />
+              <button
+                className="admin-toggle-btn"
+                disabled={marking || !markTickers.trim()}
+                onClick={handleMarkSold}
+              >
+                {marking ? '처리 중...' : '매도 처리'}
+              </button>
+              {markResult && (
+                <div style={{ marginTop: '8px' }}>
+                  {Object.entries(markResult).map(([ticker, res]) => (
+                    <p key={ticker} className={`result-msg ${res === 'OK' ? 'success' : 'fail'}`}>
+                      {ticker}: {res}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 볼린저 2차 매수 대기 현황 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">볼린저 2차 매수 대기 현황</h3>
+              <p className="admin-note">1차 매수(BB 이탈) 후 2차 매수(RSI 과매도)를 기다리는 종목입니다. 예약금은 2차 매수 전까지 다른 종목·전략에 사용되지 않으며, 2차 매수 후 남은 금액은 자동으로 해제됩니다.</p>
+              {(() => {
+                const reservations = status.bollingerReservations || {}
+                const entries = Object.entries(reservations)
+                if (entries.length === 0) {
+                  return <p className="admin-note" style={{ color: '#888' }}>대기 없음</p>
+                }
+                const total = entries.reduce((sum, [, entry]) => sum + entry.amount, 0)
+                return (
+                  <div style={{ marginTop: '6px' }}>
+                    {entries.map(([ticker, entry]) => (
+                      <div key={ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #333' }}>
+                        <span style={{ fontWeight: 600 }}>{entry.stockName}({ticker})</span>
+                        <span style={{ color: '#4fc3f7' }}>{entry.amount.toLocaleString()}원</span>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontWeight: 700 }}>
+                      <span>합계</span>
+                      <span style={{ color: '#81c784' }}>{total.toLocaleString()}원</span>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
 
             {/* 향후 추가 예정 */}
