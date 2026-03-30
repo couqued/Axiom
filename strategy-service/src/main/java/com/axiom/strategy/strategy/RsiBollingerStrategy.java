@@ -99,12 +99,22 @@ public class RsiBollingerStrategy implements TradingStrategy {
                     .build();
         }
 
-        // ── SELL 조건 (OR) ──
-        // 기존 중심선(middle)에서 상단선(upper)으로 목표가 상향
-        if (rsi > RSI_OVERBOUGHT || currentPrice.compareTo(bb.upper) >= 0) {
-            String reason = rsi > RSI_OVERBOUGHT
-                    ? String.format("과매수 청산 — RSI(%.1f) > %.0f", rsi, RSI_OVERBOUGHT)
-                    : String.format("상단선 도달 익절 — 종가(%.0f) ≥ 상단밴드(%.0f)", currentPrice.doubleValue(), bb.upper.doubleValue());
+        // ── SELL 조건 ──
+        // %B = (현재가 - 하단) / (상단 - 하단): 0=하단, 0.5=중심, 1=상단
+        double bbRange = bb.upper.subtract(bb.lower).doubleValue();
+        double bbPct = bbRange > 0 ? currentPrice.subtract(bb.lower).doubleValue() / bbRange : 0.5;
+
+        boolean isUpperBandReached = currentPrice.compareTo(bb.upper) >= 0;
+        boolean isRsiOverbought = rsi > RSI_OVERBOUGHT;
+        // RSI 과매수 매도는 중심선(%B≥0.5) 이상일 때만 허용 — 그 미만이면 홀드
+        boolean isRsiSellAllowed = isRsiOverbought && bbPct >= 0.5;
+
+        if (isUpperBandReached || isRsiSellAllowed) {
+            String reason = isUpperBandReached
+                    ? String.format("상단선 도달 익절 — 종가(%.0f) ≥ 상단밴드(%.0f) | BB[하단=%.0f, 중심=%.0f]",
+                            currentPrice.doubleValue(), bb.upper.doubleValue(), bb.lower.doubleValue(), bb.middle.doubleValue())
+                    : String.format("과매수 청산 — RSI(%.1f) > %.0f | %%B=%.2f | BB[하단=%.0f, 중심=%.0f, 상단=%.0f]",
+                            rsi, RSI_OVERBOUGHT, bbPct, bb.lower.doubleValue(), bb.middle.doubleValue(), bb.upper.doubleValue());
             return SignalDto.builder()
                     .action(SignalDto.Action.SELL)
                     .ticker(ticker)
@@ -115,13 +125,17 @@ public class RsiBollingerStrategy implements TradingStrategy {
                     .build();
         }
 
+        String holdReason = isRsiOverbought
+                ? String.format("RSI 과매수 홀드 — RSI(%.1f) but %%B=%.2f < 0.5 (중심선 미달) | BB[하단=%.0f, 중심=%.0f, 상단=%.0f]",
+                        rsi, bbPct, bb.lower.doubleValue(), bb.middle.doubleValue(), bb.upper.doubleValue())
+                : String.format("관망 — RSI(%.1f) | 종가(%.0f) vs 하단(%.0f)~중심(%.0f)",
+                        rsi, currentPrice.doubleValue(), bb.lower.doubleValue(), bb.middle.doubleValue());
         return SignalDto.builder()
                 .action(SignalDto.Action.HOLD)
                 .ticker(ticker)
                 .price(currentPrice)
                 .strategyName(getName())
-                .reason(String.format("관망 — RSI(%.1f) | 종가(%.0f) vs 하단(%.0f)~중심(%.0f)",
-                        rsi, currentPrice.doubleValue(), bb.lower.doubleValue(), bb.middle.doubleValue()))
+                .reason(holdReason)
                 .signalAt(LocalDateTime.now())
                 .build();
     }

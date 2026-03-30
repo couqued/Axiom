@@ -28,8 +28,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>보유 종목의 고점을 추적하여, 현재가가 고점 대비 설정 비율 이하로 하락하면 매도 신호를 발생시킨다.
  * <p>기본값: 고점 대비 7% 하락 시 청산 (application.yml에서 조정 가능).
- *
- * <p>peakPrices는 메모리에 저장. 키 형식: "{tradingMode}:{ticker}" (e.g. "paper:005930")
  */
 @Slf4j
 @Service
@@ -43,28 +41,25 @@ public class TrailingStopService {
     private final SlackNotifier slackNotifier;
     private final StrategyStateStore stateStore;
 
-    /** "{tradingMode}:{ticker}" → 고점 가격 */
+    /** ticker → 고점 가격 */
     private final Map<String, BigDecimal> peakPrices = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void initFromPortfolio() {
-        for (String mode : List.of("paper", "real")) {
-            try {
-                Map<String, BigDecimal> fromDb = stateStore.loadAllPeakPrices(mode);
-                fromDb.forEach((ticker, price) -> peakPrices.put(key(mode, ticker), price));
-                log.info("[TrailingStop] DB에서 peakPrices 복구 — mode={}, {}개", mode, fromDb.size());
-            } catch (Exception e) {
-                log.warn("[TrailingStop] DB peakPrices 복구 실패 (mode={}): {}", mode, e.getMessage());
-            }
+        try {
+            Map<String, BigDecimal> fromDb = stateStore.loadAllPeakPrices();
+            peakPrices.putAll(fromDb);
+            log.info("[TrailingStop] DB에서 peakPrices 복구 — {}개", fromDb.size());
+        } catch (Exception e) {
+            log.warn("[TrailingStop] DB peakPrices 복구 실패: {}", e.getMessage());
         }
 
         // DB에 없는 보유 종목은 avgPrice를 초기 고점으로 사용 (폴백)
         try {
             List<PortfolioItemDto> positions = portfolioClient.getPositions();
-            String mode = adminConfigStore.getTradingMode();
             for (PortfolioItemDto p : positions) {
                 if (p.getAvgPrice() != null) {
-                    peakPrices.putIfAbsent(key(mode, p.getTicker()), p.getAvgPrice());
+                    peakPrices.putIfAbsent(p.getTicker(), p.getAvgPrice());
                 }
             }
             if (!positions.isEmpty()) {
@@ -80,16 +75,13 @@ public class TrailingStopService {
         if (!config.isEnabled()) return;
         if (currentPrice == null || currentPrice.compareTo(BigDecimal.ZERO) <= 0) return;
 
-        String mode = adminConfigStore.getTradingMode();
-        String mapKey = key(mode, ticker);
-
         Optional<PortfolioItemDto> positionOpt = positions.stream()
                 .filter(p -> p.getTicker().equals(ticker))
                 .findFirst();
 
         if (positionOpt.isEmpty()) {
-            peakPrices.remove(mapKey);
-            stateStore.removePeakPrice(ticker, mode);
+            peakPrices.remove(ticker);
+            stateStore.removePeakPrice(ticker);
             return;
         }
 
@@ -97,27 +89,26 @@ public class TrailingStopService {
         // 1차 매수(Stage 1) 상태이면 트레일링 스탑 보류 (2차 매수를 기다림)
         PortfolioItemDto position = positionOpt.get();
         if (position.getBuyStage() != null && position.getBuyStage() == 1) {
-            log.debug("[TrailingStop][{}] {} | 1차 매수 상태 — 트레일링 스탑 보류", mode, ticker);
-            // 1차 매수 중에도 고점은 추적 (2차 매수 완료 후 정확한 고점 데이터 유지)
-            peakPrices.merge(mapKey, currentPrice, (old, cur) ->
+            log.debug("[TrailingStop] {} | 1차 매수 상태 — 트레일링 스탑 보류", ticker);
+            peakPrices.merge(ticker, currentPrice, (old, cur) ->
                     cur.compareTo(old) > 0 ? cur : old);
             return;
         }
 
-        BigDecimal prevPeak = peakPrices.get(mapKey);
+        BigDecimal prevPeak = peakPrices.get(ticker);
         if (prevPeak == null) {
             BigDecimal avgPrice = position.getAvgPrice();
             if (avgPrice != null && avgPrice.compareTo(BigDecimal.ZERO) > 0) {
-                peakPrices.put(mapKey, avgPrice);
+                peakPrices.put(ticker, avgPrice);
             }
-            prevPeak = peakPrices.get(mapKey);
+            prevPeak = peakPrices.get(ticker);
         }
 
-        BigDecimal peak = peakPrices.merge(mapKey, currentPrice, (old, cur) ->
+        BigDecimal peak = peakPrices.merge(ticker, currentPrice, (old, cur) ->
                 cur.compareTo(old) > 0 ? cur : old);
         if (prevPeak == null || peak.compareTo(prevPeak) != 0) {
             try {
-                stateStore.savePeakPrice(ticker, peak, mode);
+                stateStore.savePeakPrice(ticker, peak);
             } catch (Exception e) {
                 log.error("[TrailingStop] DB peakPrice 저장 실패 — {}: {}", ticker, e.getMessage());
             }
@@ -127,35 +118,31 @@ public class TrailingStopService {
         BigDecimal stopPrice = peak.multiply(BigDecimal.valueOf(1.0 - stopPercent / 100.0))
                 .setScale(0, RoundingMode.HALF_UP);
 
-        log.debug("[TrailingStop][{}] {} | 현재가: {} | 고점: {} | 기준가: {}",
-                mode, ticker, currentPrice, peak, stopPrice);
+        log.debug("[TrailingStop] {} | 현재가: {} | 고점: {} | 기준가: {}",
+                ticker, currentPrice, peak, stopPrice);
 
         if (currentPrice.compareTo(stopPrice) <= 0) {
-            log.warn("[TrailingStop][{}] 트레일링 스탑 발동 — {} | 현재가: {} | 고점: {} | 하락률: {}%",
-                    mode, ticker, currentPrice, peak, String.format("%.1f", stopPercent));
+            log.warn("[TrailingStop] 트레일링 스탑 발동 — {} | 현재가: {} | 고점: {} | 하락률: {}%",
+                    ticker, currentPrice, peak, String.format("%.1f", stopPercent));
             boolean sold = executeSell(ticker, currentPrice, positions, stopPercent);
             if (sold) {
-                peakPrices.remove(mapKey);
-                stateStore.removePeakPrice(ticker, mode);
+                peakPrices.remove(ticker);
+                stateStore.removePeakPrice(ticker);
             } else {
                 log.warn("[TrailingStop] 매도 최종 실패 — {} peakPrices 유지, 다음 주기(1분 후)에 재시도", ticker);
             }
         }
     }
 
-    public void removePeak(String ticker, String mode) {
-        peakPrices.remove(key(mode, ticker));
-        stateStore.removePeakPrice(ticker, mode);
+    public void removePeak(String ticker) {
+        peakPrices.remove(ticker);
+        stateStore.removePeakPrice(ticker);
     }
 
     public Map<String, TrailingStopStatusDto> getStatus() {
-        String mode = adminConfigStore.getTradingMode();
-        String prefix = mode + ":";
         double stopPct = adminConfigStore.getTrailingStopPct();
         Map<String, TrailingStopStatusDto> result = new HashMap<>();
-        peakPrices.forEach((mapKey, peak) -> {
-            if (!mapKey.startsWith(prefix)) return;
-            String ticker = mapKey.substring(prefix.length());
+        peakPrices.forEach((ticker, peak) -> {
             BigDecimal stopPrice = peak.multiply(BigDecimal.valueOf(1.0 - stopPct / 100.0))
                     .setScale(0, RoundingMode.HALF_UP);
             result.put(ticker, new TrailingStopStatusDto(peak, stopPrice));
@@ -183,9 +170,5 @@ public class TrailingStopService {
                     return result.success();
                 })
                 .orElse(false);
-    }
-
-    private String key(String mode, String ticker) {
-        return mode + ":" + ticker;
     }
 }

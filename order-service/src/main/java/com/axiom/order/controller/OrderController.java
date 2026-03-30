@@ -4,7 +4,6 @@ import com.axiom.order.dto.OrderRequest;
 import com.axiom.order.dto.OrderResponse;
 import com.axiom.order.entity.TradeOrder.OrderType;
 import com.axiom.order.service.OrderService;
-import com.axiom.order.store.TradingModeStore;
 import com.axiom.order.util.MarketHoursChecker;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -20,9 +19,7 @@ public class OrderController {
 
     private final OrderService orderService;
     private final MarketHoursChecker marketHoursChecker;
-    private final TradingModeStore tradingModeStore;
 
-    // 매수 주문: POST /api/orders/buy
     @PostMapping("/api/orders/buy")
     public ResponseEntity<?> buy(@RequestBody OrderRequest request) {
         if (!marketHoursChecker.isMarketOpen()) {
@@ -32,7 +29,6 @@ public class OrderController {
         return ResponseEntity.ok(orderService.placeOrder(request));
     }
 
-    // 매도 주문: POST /api/orders/sell
     @PostMapping("/api/orders/sell")
     public ResponseEntity<?> sell(@RequestBody OrderRequest request) {
         if (!marketHoursChecker.isMarketOpen()) {
@@ -44,41 +40,33 @@ public class OrderController {
 
     private ResponseEntity<Map<String, String>> marketClosedResponse() {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                "error",       "MARKET_CLOSED",
-                "message",     "현재 주식 시장 운영 시간이 아닙니다. (평일 09:00~15:30 KST)",
+                "error",        "MARKET_CLOSED",
+                "message",      "현재 주식 시장 운영 시간이 아닙니다. (평일 09:00~15:30 KST)",
                 "marketOpenAt", marketHoursChecker.nextMarketOpenAt()
         ));
     }
 
-    // 주문 내역: GET /api/orders?mode=paper|real (없으면 전체)
     @GetMapping("/api/orders")
-    public ResponseEntity<List<OrderResponse>> getOrders(
-            @RequestParam(required = false) String mode) {
-        return ResponseEntity.ok(orderService.getOrdersByMode(mode));
+    public ResponseEntity<List<OrderResponse>> getOrders() {
+        return ResponseEntity.ok(orderService.getAllOrders());
     }
 
-    // 종목별 주문 내역: GET /api/orders/ticker/{ticker}
     @GetMapping("/api/orders/ticker/{ticker}")
     public ResponseEntity<List<OrderResponse>> getOrdersByTicker(@PathVariable String ticker) {
         return ResponseEntity.ok(orderService.getOrdersByTicker(ticker));
     }
 
-    // 관리자용 티커별 삭제: DELETE /api/orders/admin/by-ticker?ticker=006360&mode=real
-    @DeleteMapping("/api/orders/admin/by-ticker")
-    public ResponseEntity<Void> deleteByTicker(
-            @RequestParam String ticker,
-            @RequestParam String mode) {
-        orderService.deleteByTicker(ticker, mode);
-        return ResponseEntity.noContent().build();
+    @PostMapping("/api/orders/sell-all")
+    public ResponseEntity<?> sellAll() {
+        if (!marketHoursChecker.isMarketOpen()) {
+            return marketClosedResponse();
+        }
+        return ResponseEntity.ok(orderService.sellAll());
     }
 
-    // 내부 엔드포인트: 거래 모드 변경 전파
-    @PatchMapping("/internal/trading-mode")
-    public ResponseEntity<Void> updateTradingMode(@RequestBody Map<String, String> body) {
-        String mode = body.get("mode");
-        if (mode != null) {
-            tradingModeStore.setMode(mode);
-        }
-        return ResponseEntity.ok().build();
+    @DeleteMapping("/api/orders/admin/by-ticker")
+    public ResponseEntity<Void> deleteByTicker(@RequestParam String ticker) {
+        orderService.deleteByTicker(ticker);
+        return ResponseEntity.noContent().build();
     }
 }

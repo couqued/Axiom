@@ -75,7 +75,6 @@ export default function StockSearch() {
             <span>저가 {Number(price.lowPrice).toLocaleString()}</span>
             <span>거래량 {Number(price.volume).toLocaleString()}</span>
           </div>
-          {price.mock && <p className="mock-badge">MOCK 데이터</p>}
         </div>
       )}
     </div>

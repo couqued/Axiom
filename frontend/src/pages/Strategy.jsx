@@ -152,18 +152,11 @@ export default function Strategy({ liveAdminConfig }) {
   const isBullish = marketState === 'BULLISH'
   const isBearish = marketState === 'BEARISH'
   const activeStrategies = STRATEGIES_BY_STATE[marketState] ?? []
-  const tradingMode = adminConfig?.tradingMode ?? 'paper'
-  const activeSettings = adminConfig ? (tradingMode === 'real' ? adminConfig.real : adminConfig.paper) : null
-  const maxPositions = activeSettings?.maxPositions ?? '-'
+  const maxPositions = adminConfig?.settings?.maxPositions ?? '-'
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-        <h2 style={{ margin: 0 }}>자동매매 전략</h2>
-        <span className={`mode-badge ${tradingMode}`}>
-          {tradingMode === 'paper' ? '모의투자' : '운영'}
-        </span>
-      </div>
+      <h2 style={{ marginBottom: '4px' }}>자동매매 전략</h2>
 
       {error && <div className="error">{error}</div>}
 

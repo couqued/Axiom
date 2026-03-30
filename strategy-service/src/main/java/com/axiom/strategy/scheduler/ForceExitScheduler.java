@@ -15,7 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.util.TradingCalendar;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -42,17 +41,15 @@ public class ForceExitScheduler {
     private final OrderClient orderClient;
     private final SlackNotifier slackNotifier;
     private final DailySellBlockService dailySellBlockService;
-    private final AdminConfigStore adminConfigStore;
 
-    @Scheduled(cron = "0 20 15 * * MON-FRI", zone = "Asia/Seoul")
+    @Scheduled(cron = "0 19 15 * * MON-FRI", zone = "Asia/Seoul")
     public void forceExit() {
         if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
             log.info("[ForceExit] 공휴일 — 스킵");
             return;
         }
 
-        String mode = adminConfigStore.getTradingMode();
-        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought(mode);
+        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought();
         LocalDate today = LocalDate.now(TradingCalendar.KST);
 
         // 오늘 변동성 돌파로 매수한 종목
@@ -106,22 +103,16 @@ public class ForceExitScheduler {
         // 포트폴리오에도 없는 종목(이미 타 경로로 청산됨)도 함께 정리
         boughtToday.stream()
                 .filter(ticker -> soldOk.contains(ticker) || !heldTickers.contains(ticker))
-                .forEach(ticker -> volatilityBreakoutStrategy.removeTodayBought(ticker, mode));
+                .forEach(ticker -> volatilityBreakoutStrategy.removeTodayBought(ticker));
 
         // 당일 강제청산 실행 완료 — 이후 신규 매수 차단
-        volatilityBreakoutStrategy.markForceExited(mode);
+        volatilityBreakoutStrategy.markForceExited();
     }
 
     /**
      * 전 거래일 변동성 돌파 미청산 포지션 장 시작 직후 청산 (09:05).
      *
      * <p>15:20 강제청산이 서비스 재시작 등으로 누락된 경우를 대비한 보완 스케줄.
-     * <ol>
-     *   <li>todayBought에서 오늘 날짜가 아닌 항목 추출 (오버나이트 후보)</li>
-     *   <li>order-service 이력에서 volatility-breakout BUY FILLED 확인 (전략 검증)</li>
-     *   <li>portfolio-service에서 실제 보유 중인지 확인</li>
-     *   <li>검증 통과 종목 매도 → FORCE_EXIT</li>
-     * </ol>
      */
     @Scheduled(cron = "0 5 9 * * MON-FRI", zone = "Asia/Seoul")
     public void exitOvernightPositions() {
@@ -136,8 +127,7 @@ public class ForceExitScheduler {
             return;
         }
 
-        String mode = adminConfigStore.getTradingMode();
-        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought(mode);
+        Map<String, LocalDate> todayBought = volatilityBreakoutStrategy.getTodayBought();
         LocalDate today = LocalDate.now(TradingCalendar.KST);
 
         // ① 전 거래일 매수 후 미청산 후보 추출
@@ -209,9 +199,8 @@ public class ForceExitScheduler {
         slackNotifier.sendOvernightExitResult(true, exitItems.size(), anyFailed, exitItems);
 
         // ④ 매도 성공 종목 + 포트폴리오 미보유(이미 청산) 종목만 todayBought에서 제거
-        // 매도 실패 종목은 유지 → 다음날 09:05 재시도
         confirmedTickers.stream()
                 .filter(t -> soldOk.contains(t) || !heldSet.contains(t))
-                .forEach(t -> volatilityBreakoutStrategy.removeTodayBought(t, mode));
+                .forEach(t -> volatilityBreakoutStrategy.removeTodayBought(t));
     }
 }

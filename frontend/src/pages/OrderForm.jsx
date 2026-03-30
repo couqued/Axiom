@@ -86,7 +86,6 @@ export default function OrderForm() {
                 {Number(price.currentPrice).toLocaleString()}원
               </span>
             )}
-            {price?.mock && <span className="mock-badge">MOCK</span>}
           </div>
 
           <div className="order-fields">

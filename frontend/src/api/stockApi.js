@@ -26,13 +26,13 @@ export const buyStock = (body) =>
 export const sellStock = (body) =>
   request('/api/orders/sell', { method: 'POST', body: JSON.stringify({ ...body, orderType: 'SELL' }) })
 
-// 주문 내역 (mode: "paper"|"real"|null)
-export const getOrders = (mode) =>
-  request(mode ? `/api/orders?mode=${mode}` : '/api/orders')
+// 주문 내역
+export const getOrders = () =>
+  request('/api/orders')
 
-// 포트폴리오 (mode: "paper"|"real"|null → null이면 서버 활성 모드 기준)
-export const getPortfolio = (mode) =>
-  request(mode ? `/api/portfolio?mode=${mode}` : '/api/portfolio')
+// 포트폴리오
+export const getPortfolio = () =>
+  request('/api/portfolio')
 
 // 전략 메타데이터가 포함된 포트폴리오 (buyStage 등)
 export const getEnrichedPortfolio = () =>
@@ -45,7 +45,6 @@ export const getBalance = () =>
     cash:         r.cashBalance    ?? 0,
     totalPnl:     r.profitLoss     ?? 0,
     totalPnlRate: r.profitLossRate ?? 0,
-    mock:         r.mock,
   }))
 
 // 시장 상태 조회
@@ -67,21 +66,15 @@ export const getRunStatus = () =>
 export const getAdminStatus = () =>
   request('/api/strategy/admin/status')
 
-// 관리자 — 매매 중단 (targetMode: "paper"|"real"|null)
-export const pauseTrading = (targetMode) =>
-  request(targetMode
-    ? `/api/strategy/admin/pause?targetMode=${targetMode}`
-    : '/api/strategy/admin/pause',
-    { method: 'POST' })
+// 관리자 — 매매 중단
+export const pauseTrading = () =>
+  request('/api/strategy/admin/pause', { method: 'POST' })
 
-// 관리자 — 매매 재개 (targetMode: "paper"|"real"|null)
-export const resumeTrading = (targetMode) =>
-  request(targetMode
-    ? `/api/strategy/admin/resume?targetMode=${targetMode}`
-    : '/api/strategy/admin/resume',
-    { method: 'POST' })
+// 관리자 — 매매 재개
+export const resumeTrading = () =>
+  request('/api/strategy/admin/resume', { method: 'POST' })
 
-// 관리자 — 투자 설정 변경 (tradingMode, targetMode, 개별 설정 포함 가능)
+// 관리자 — 투자 설정 변경
 export const updateAdminConfig = (body) =>
   request('/api/strategy/admin/config', { method: 'PATCH', body: JSON.stringify(body) })
 
@@ -123,3 +116,7 @@ export const markSold = (tickers) =>
     method: 'POST',
     body: JSON.stringify({ tickers }),
   })
+
+// 전체 매도 (보유 종목 일괄 시장가 매도)
+export const sellAll = () =>
+  request('/api/orders/sell-all', { method: 'POST' })

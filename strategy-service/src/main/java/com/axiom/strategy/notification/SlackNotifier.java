@@ -1,14 +1,13 @@
 package com.axiom.strategy.notification;
 
-import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.engine.StrategyEngine;
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -26,15 +25,12 @@ public class SlackNotifier {
     @Value("${slack.enabled:false}")
     private boolean enabled;
 
-    @Autowired
-    private AdminConfigStore adminConfigStore;
-
     /**
      * 전략 신호 + 주문 결과 단일 메시지.
      * success=true : ✅ 체결
      * success=false: ❌ 주문 실패 + 실패사유 포함
      */
-    public void sendTradeResult(SignalDto signal, boolean success, String errorMsg) {
+    public void sendTradeResult(SignalDto signal, boolean success, String errorMsg, BigDecimal avgBuyPrice) {
         boolean isBuy = signal.getAction() == SignalDto.Action.BUY;
         String actionKo    = isBuy ? "매수" : "매도";
         String resultEmoji = success ? "✅" : "❌";
@@ -52,10 +48,30 @@ public class SlackNotifier {
                 signal.getReason()
         ));
 
+        if (!isBuy && avgBuyPrice != null && avgBuyPrice.compareTo(BigDecimal.ZERO) > 0) {
+            double roi = signal.getPrice().subtract(avgBuyPrice)
+                    .divide(avgBuyPrice, 6, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+            sb.append(String.format("\n> 매수평균가: %s원  |  수익률: %s%.2f%%",
+                    formatPrice(avgBuyPrice), roi >= 0 ? "+" : "", roi));
+        }
+
         if (!success && errorMsg != null) {
             sb.append("\n> 실패사유: ").append(errorMsg);
         }
         send(sb.toString());
+    }
+
+    /**
+     * RSI 과매수이나 볼린저 중심선 미달로 홀드 유지 알림 (최초 1회).
+     */
+    public void sendRsiOverboughtHold(SignalDto signal) {
+        String text = String.format(
+                "⏸️ *[RSI 과매수 홀드]* %s\n> %s",
+                formatStock(signal.getStockName(), signal.getTicker()),
+                signal.getReason()
+        );
+        send(text);
     }
 
     /**
@@ -181,12 +197,6 @@ public class SlackNotifier {
                     .collect(Collectors.joining(", "));
             sb.append("\n> 매도 종목: ").append(names);
         }
-        if (!skippedList.isEmpty()) {
-            String names = skippedList.stream()
-                    .map(r -> formatStock(r.stockName(), r.ticker()) + "(" + r.reason() + ")")
-                    .collect(Collectors.joining(", "));
-            sb.append("\n> 스킵 종목: ").append(names);
-        }
         send(sb.toString());
     }
 
@@ -205,7 +215,7 @@ public class SlackNotifier {
                         .map(line -> "\n> " + line)
                         .collect(Collectors.joining());
         String text = String.format(
-                "🕐 *[시간별 요약 %02d:xx]* 실행 %d회  |  평가 %d개\n" +
+                "🕐 *[시간별 요약 %02d:00]* 실행 %d회  |  평가 %d개\n" +
                 "> 매수: %d건  ·  매도: %d건  ·  오류: %d건" +
                 "%s%s",
                 hour, runCount, evaluated, bought, sold, errors,
@@ -250,9 +260,6 @@ public class SlackNotifier {
     }
 
     private void send(String text) {
-        if ("paper".equals(adminConfigStore.getTradingMode())) {
-            text = text.replaceFirst("^(\\S+\\s+)", "$1*[모의]* ");
-        }
         if (!enabled) {
             log.info("[Slack-DISABLED] {}", text);
             return;

@@ -26,18 +26,18 @@ public class StrategyStateStore {
     // ── BUY_STAGE ───────────────────────────────────────────────────────────
 
     @Transactional
-    public void saveBuyStage(String ticker, int stage, String tradingMode) {
-        upsert(stageType(tradingMode), ticker, String.valueOf(stage));
+    public void saveBuyStage(String ticker, int stage) {
+        upsert(BUY_STAGE, ticker, String.valueOf(stage));
     }
 
     @Transactional
-    public void removeBuyStage(String ticker, String tradingMode) {
-        repo.deleteByTypeAndTicker(stageType(tradingMode), ticker);
+    public void removeBuyStage(String ticker) {
+        repo.deleteByTypeAndTicker(BUY_STAGE, ticker);
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Integer> loadAllBuyStages(String tradingMode) {
-        return repo.findAllByType(stageType(tradingMode)).stream()
+    public Map<String, Integer> loadAllBuyStages() {
+        return repo.findAllByType(BUY_STAGE).stream()
                 .collect(Collectors.toMap(
                         StrategyState::getTicker,
                         s -> Integer.parseInt(s.getValue())));
@@ -46,36 +46,36 @@ public class StrategyStateStore {
     // ── ENTRY_TAG ────────────────────────────────────────────────────────────
 
     @Transactional
-    public void saveEntryTag(String ticker, String tag, String tradingMode) {
-        upsert(tagType(tradingMode), ticker, tag);
+    public void saveEntryTag(String ticker, String tag) {
+        upsert(ENTRY_TAG, ticker, tag);
     }
 
     @Transactional
-    public void removeEntryTag(String ticker, String tradingMode) {
-        repo.deleteByTypeAndTicker(tagType(tradingMode), ticker);
+    public void removeEntryTag(String ticker) {
+        repo.deleteByTypeAndTicker(ENTRY_TAG, ticker);
     }
 
     @Transactional(readOnly = true)
-    public Map<String, String> loadAllEntryTags(String tradingMode) {
-        return repo.findAllByType(tagType(tradingMode)).stream()
+    public Map<String, String> loadAllEntryTags() {
+        return repo.findAllByType(ENTRY_TAG).stream()
                 .collect(Collectors.toMap(StrategyState::getTicker, StrategyState::getValue));
     }
 
     // ── PEAK_PRICE ──────────────────────────────────────────────────────────
 
     @Transactional
-    public void savePeakPrice(String ticker, BigDecimal price, String tradingMode) {
-        upsert(peakType(tradingMode), ticker, price.toPlainString());
+    public void savePeakPrice(String ticker, BigDecimal price) {
+        upsert(PEAK_PRICE, ticker, price.toPlainString());
     }
 
     @Transactional
-    public void removePeakPrice(String ticker, String tradingMode) {
-        repo.deleteByTypeAndTicker(peakType(tradingMode), ticker);
+    public void removePeakPrice(String ticker) {
+        repo.deleteByTypeAndTicker(PEAK_PRICE, ticker);
     }
 
     @Transactional(readOnly = true)
-    public Map<String, BigDecimal> loadAllPeakPrices(String tradingMode) {
-        return repo.findAllByType(peakType(tradingMode)).stream()
+    public Map<String, BigDecimal> loadAllPeakPrices() {
+        return repo.findAllByType(PEAK_PRICE).stream()
                 .collect(Collectors.toMap(
                         StrategyState::getTicker,
                         s -> new BigDecimal(s.getValue())));
@@ -84,18 +84,18 @@ public class StrategyStateStore {
     // ── BUY_DATE ────────────────────────────────────────────────────────────
 
     @Transactional
-    public void saveBuyDate(String ticker, LocalDate date, String tradingMode) {
-        upsert(buyType(tradingMode), ticker, date.toString());
+    public void saveBuyDate(String ticker, LocalDate date) {
+        upsert(BUY_DATE, ticker, date.toString());
     }
 
     @Transactional
-    public void removeBuyDate(String ticker, String tradingMode) {
-        repo.deleteByTypeAndTicker(buyType(tradingMode), ticker);
+    public void removeBuyDate(String ticker) {
+        repo.deleteByTypeAndTicker(BUY_DATE, ticker);
     }
 
     @Transactional(readOnly = true)
-    public Map<String, LocalDate> loadAllBuyDates(String tradingMode) {
-        return repo.findAllByType(buyType(tradingMode)).stream()
+    public Map<String, LocalDate> loadAllBuyDates() {
+        return repo.findAllByType(BUY_DATE).stream()
                 .collect(Collectors.toMap(
                         StrategyState::getTicker,
                         s -> LocalDate.parse(s.getValue())));
@@ -104,45 +104,24 @@ public class StrategyStateStore {
     // ── TODAY_BOUGHT ─────────────────────────────────────────────────────────
 
     @Transactional
-    public void saveTodayBought(String ticker, LocalDate date, String mode) {
-        upsert(todayBoughtType(mode), ticker, date.toString());
+    public void saveTodayBought(String ticker, LocalDate date) {
+        upsert(TODAY_BOUGHT, ticker, date.toString());
     }
 
     @Transactional
-    public void removeTodayBought(String ticker, String mode) {
-        repo.deleteByTypeAndTicker(todayBoughtType(mode), ticker);
+    public void removeTodayBought(String ticker) {
+        repo.deleteByTypeAndTicker(TODAY_BOUGHT, ticker);
     }
 
     @Transactional(readOnly = true)
-    public Map<String, LocalDate> loadAllTodayBought(String mode) {
-        return repo.findAllByType(todayBoughtType(mode)).stream()
+    public Map<String, LocalDate> loadAllTodayBought() {
+        return repo.findAllByType(TODAY_BOUGHT).stream()
                 .collect(Collectors.toMap(
                         StrategyState::getTicker,
                         s -> LocalDate.parse(s.getValue())));
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
-
-    /** tradingMode를 type 키에 내포: "PEAK_PRICE_paper", "PEAK_PRICE_real" */
-    private String peakType(String tradingMode) {
-        return PEAK_PRICE + "_" + (tradingMode != null ? tradingMode : "paper");
-    }
-
-    private String buyType(String tradingMode) {
-        return BUY_DATE + "_" + (tradingMode != null ? tradingMode : "paper");
-    }
-
-    private String stageType(String tradingMode) {
-        return BUY_STAGE + "_" + (tradingMode != null ? tradingMode : "paper");
-    }
-
-    private String tagType(String tradingMode) {
-        return ENTRY_TAG + "_" + (tradingMode != null ? tradingMode : "paper");
-    }
-
-    private String todayBoughtType(String mode) {
-        return TODAY_BOUGHT + "_" + (mode != null ? mode : "paper");
-    }
 
     private void upsert(String type, String ticker, String value) {
         repo.findByTypeAndTicker(type, ticker).ifPresentOrElse(

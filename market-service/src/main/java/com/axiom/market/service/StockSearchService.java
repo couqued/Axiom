@@ -12,7 +12,6 @@ import java.util.stream.Collectors;
 @Service
 public class StockSearchService {
 
-    // 주요 종목 mock 데이터 (KIS API 연동 전까지 사용)
     private static final List<StockInfoDto> STOCK_LIST = List.of(
         StockInfoDto.builder().ticker("005930").stockName("삼성전자").market("KOSPI").sector("반도체").build(),
         StockInfoDto.builder().ticker("000660").stockName("SK하이닉스").market("KOSPI").sector("반도체").build(),
@@ -37,7 +36,7 @@ public class StockSearchService {
                         || s.getTicker().contains(query)
                         || s.getSector().toLowerCase().contains(lowerQuery))
                 .collect(Collectors.toList());
-        log.info("[MOCK] 종목 검색 - query: {}, 결과: {}건", query, result.size());
+        log.info("[StockSearch] 종목 검색 - query: {}, 결과: {}건", query, result.size());
         return result;
     }
 

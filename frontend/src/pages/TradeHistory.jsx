@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getOrders, getStockPrice, getAdminStatus } from '../api/stockApi'
+import { getOrders, getStockPrice, sellAll } from '../api/stockApi'
 
 const CLOSE_REASON_KO = {
   SIGNAL: '전략 신호',
@@ -38,26 +38,16 @@ export default function TradeHistory() {
   const [stockNames, setStockNames] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeMode, setActiveMode] = useState(null)
-  const [modeFilter, setModeFilter] = useState(null)
+  const [isSelling, setIsSelling] = useState(false)
 
-  useEffect(() => {
-    getAdminStatus()
-      .then(s => {
-        const mode = s.tradingMode || 'paper'
-        setActiveMode(mode)
-        setModeFilter(mode)
-      })
-      .catch(() => setModeFilter('paper'))
-  }, [])
-
-  const load = (mode) => {
+  const load = () => {
     setLoading(true)
-    getOrders(mode)
+    getOrders()
       .then(data => {
-        setOrders(data)
+        const filtered = data.filter(o => o.status !== 'FAILED')
+        setOrders(filtered)
         const numericTickers = [...new Set(
-          data.filter(o => !o.stockName || /^\d+$/.test(o.stockName)).map(o => o.ticker)
+          filtered.filter(o => !o.stockName || /^\d+$/.test(o.stockName)).map(o => o.ticker)
         )]
         if (numericTickers.length > 0) {
           Promise.all(numericTickers.map(t => getStockPrice(t).catch(() => null)))
@@ -74,30 +64,28 @@ export default function TradeHistory() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => {
-    if (modeFilter !== null) load(modeFilter)
-  }, [modeFilter])
+  useEffect(() => { load() }, [])
 
-  const handleModeChange = (mode) => {
-    setModeFilter(mode)
-    setError(null)
+  const handleSellAll = () => {
+    if (!window.confirm('보유 종목을 모두 시장가 매도합니다. 계속하시겠습니까?')) return
+    setIsSelling(true)
+    sellAll()
+      .then(results => {
+        const count = results.length
+        alert(`${count}개 종목 매도 완료`)
+        load()
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setIsSelling(false))
   }
-
-  if (modeFilter === null) return <div className="loading">로딩 중...</div>
 
   return (
     <div className="page">
       <div className="page-header">
         <h2>매매 내역</h2>
-        <button className="refresh-btn" onClick={() => load(modeFilter)}>새로고침</button>
-      </div>
-
-      <div className="mode-filter-tabs">
-        <button className={`mode-tab-btn ${modeFilter === 'paper' ? 'active' : ''}`} onClick={() => handleModeChange('paper')}>
-          모의투자 {activeMode === 'paper' && <span className="active-dot" />}
-        </button>
-        <button className={`mode-tab-btn real ${modeFilter === 'real' ? 'active' : ''}`} onClick={() => handleModeChange('real')}>
-          운영 (실계좌) {activeMode === 'real' && <span className="active-dot" />}
+        <button className="refresh-btn" onClick={load}>새로고침</button>
+        <button className="sell-all-btn" onClick={handleSellAll} disabled={isSelling}>
+          {isSelling ? '매도 중...' : '전체 매도'}
         </button>
       </div>
 

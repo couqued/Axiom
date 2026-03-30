@@ -29,12 +29,6 @@ spring:
         spring.json.trusted.packages: "*"
 
 kis:
-  mode: paper   # mock | paper | real
-  paper:
-    base-url: https://openapivts.koreainvestment.com:29443
-    app-key: ${KIS_PAPER_APP_KEY:PLACEHOLDER}
-    app-secret: ${KIS_PAPER_APP_SECRET:PLACEHOLDER}
-    account-no: ${KIS_PAPER_ACCOUNT_NO:PLACEHOLDER}
   real:
     base-url: https://openapi.koreainvestment.com:9443
     app-key: ${KIS_REAL_APP_KEY:PLACEHOLDER}

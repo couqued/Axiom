@@ -25,10 +25,10 @@ public class PortfolioClient {
     /**
      * 외부 매도(MTS 등) 후 포트폴리오 DB에서 포지션 삭제.
      */
-    public void deletePosition(String ticker, String mode) {
+    public void deletePosition(String ticker) {
         try {
             portfolioWebClient.delete()
-                    .uri("/api/portfolio/admin/by-ticker?ticker={t}&mode={m}", ticker, mode)
+                    .uri("/api/portfolio/admin/by-ticker?ticker={t}", ticker)
                     .retrieve()
                     .bodyToMono(Void.class)
                     .block();

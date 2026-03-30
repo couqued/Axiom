@@ -1,6 +1,5 @@
 package com.axiom.strategy.scheduler;
 
-import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.MarketClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.PortfolioItemDto;
@@ -23,7 +22,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class TrailingStopScheduler {
 
-    private final AdminConfigStore adminConfigStore;
     private final PortfolioClient portfolioClient;
     private final MarketClient marketClient;
     private final TrailingStopService trailingStopService;
@@ -49,14 +47,11 @@ public class TrailingStopScheduler {
 
         if (now.getHour() == 15 && now.getMinute() > 20) return;
 
-        if (adminConfigStore.isPaused()) return;
-
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
         if (positions.isEmpty()) return;
 
         // V2: 매수 단계 정보 복구 (트레일링 스탑 보류 로직용)
-        String tradingMode = adminConfigStore.getTradingMode();
-        java.util.Map<String, Integer> stages = strategyStateStore.loadAllBuyStages(tradingMode);
+        java.util.Map<String, Integer> stages = strategyStateStore.loadAllBuyStages();
         positions.forEach(p -> {
             Integer s = stages.get(p.getTicker());
             if (s != null) p.withBuyStage(s);

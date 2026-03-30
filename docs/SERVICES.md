@@ -168,8 +168,8 @@ market-service/
     │   │   └── InternalMarketController.java ← GET /internal/screened-tickers (신규)
     │   ├── service/
     │   │   ├── KisTokenService.java       ← KIS 토큰 발급/캐싱
-    │   │   ├── KisMarketApiService.java   ← 현재가 조회 (mock/paper/real, mrkt_warn_cls_code 포함)
-    │   │   ├── StockSearchService.java    ← 종목 검색 (mock 하드코딩)
+    │   │   ├── KisMarketApiService.java   ← 현재가 조회 (real 전용, mrkt_warn_cls_code 포함)
+    │   │   ├── StockSearchService.java    ← 종목 검색 (하드코딩)
     │   │   ├── CandleService.java         ← 일봉 조회/수집/저장
     │   │   ├── IndexCandleService.java    ← 지수 일봉 조회 (코스피/코스닥, 항상 real 서버 사용)
     │   │   └── StockScreenerService.java  ← 코스피200+코스닥150 유니버스 로드 및 캐싱 (신규)
@@ -189,13 +189,10 @@ market-service/
         └── application-secret.yml         ← KIS API 키 (gitignore)
 └── src/test/
     ├── java/com/axiom/market/
-    │   ├── fixture/
-    │   │   └── MarketMockFixture.java     ← Mock 가격/캔들 데이터 상수 + 팩토리 (테스트 전용)
     │   └── service/
-    │       ├── KisMarketApiServiceTest.java  ← mock 가격 구조 검증 (ticker, mock=true, isSafe())
     │       └── StockSearchServiceTest.java   ← 종목 검색 필터링 로직 검증 (이름/코드/섹터)
     └── resources/
-        └── application-test.yml           ← H2 인메모리 DB, kis.mode=mock, slack.enabled=false
+        └── application-test.yml           ← H2 인메모리 DB, slack.enabled=false
 ```
 
 ### `build.gradle`
@@ -226,9 +223,7 @@ spring:
       ddl-auto: update  # 기동 시 엔티티 기반으로 테이블 자동 생성/변경
 
 kis:
-  mode: paper           # mock | paper | real
-  paper:
-    base-url: https://openapivts.koreainvestment.com:29443  # 모의투자
+  mode: real            # real 전용 (mock/paper 제거)
   real:
     base-url: https://openapi.koreainvestment.com:9443       # 실계좌
 
@@ -254,26 +249,22 @@ candle:
 ```java
 @ConfigurationProperties(prefix = "kis")
 public class KisApiConfig {
-    private String mode;        // "mock" | "paper" | "real"
-    private ModeConfig paper;
+    private String mode;        // "real" (mock/paper 제거)
     private ModeConfig real;
 
-    public ModeConfig getActive() {
-        return "real".equals(mode) ? real : paper;
+    public ModeConfig getReal() {
+        return real;
     }
-    public boolean isMock()  { return "mock".equals(mode); }
-    public boolean isPaper() { return "paper".equals(mode); }
 
     @Bean
     public WebClient kisWebClient() {
-        // mock이면 더미 URL, 아니면 getActive() 서버 URL (paper/real 모드 따라감)
+        // 항상 real 서버 URL 사용 (TradingModeStore 제거 후 real 고정)
     }
 
     @Bean
     public WebClient kisRealWebClient() {
         // mode와 무관하게 항상 real 서버 URL 사용
         // 사용처: ① IndexCandleService (지수 일봉) ② KisMarketApiService (종목명 조회)
-        // paper 서버가 지수 API에서 잘못된 데이터를 반환하고, hts_kor_isnm을 미반환하는 문제를 우회
     }
 }
 ```
@@ -309,14 +300,13 @@ GET /internal/token
 
 ```
 getCurrentPrice(ticker)
-  mock  → 종목별 기준가 ± 랜덤 변동 (최대 ±10,000원), marketWarnCode="00" 고정
-  paper/real → KIS inquire-price API 호출
-               TR: FHKST01010100
-               반환: 현재가, 등락, 고/저/시가, 거래량, mrkt_warn_cls_code
-               mrkt_warn_cls_code → StockPriceDto.marketWarnCode 매핑
+  → KIS inquire-price API 호출 (real 서버 고정)
+    TR: FHKST01010100
+    반환: 현재가, 등락, 고/저/시가, 거래량, mrkt_warn_cls_code
+    mrkt_warn_cls_code → StockPriceDto.marketWarnCode 매핑
 ```
 
-**종목명(stockName) 조회 전략 (paper/real):**
+**종목명(stockName) 조회 전략 (real 서버):**
 
 `inquire-price` (FHKST01010100) 응답에 `hts_kor_isnm` 필드가 없는 경우(VTS 모의투자 서버에서 미반환)가 있어 real 서버 fallback을 적용.
 
@@ -386,18 +376,18 @@ GET /internal/screened-tickers
 
 ### `CandleService.java`
 
-> **주식 일봉(OHLCV) 데이터는 `kisWebClient` (mode 설정에 따라 paper/real)를 사용합니다.**
+> **주식 일봉(OHLCV) 데이터는 `kisWebClient` (real 서버 고정)를 사용합니다.**
 > 지수 일봉은 `IndexCandleService`가 별도로 real 서버에서 조회합니다.
 
 ```
 getCandles(ticker, days)
-  mock → 랜덤 캔들 생성 (주말 제외, ticker 해시 기반 고정 시드로 일관성 유지)
-  paper/real:
-    ① DB 조회 (market.daily_candles, from ~ today)
-    ② 마지막 수집일 이후 데이터 없으면 KIS API 보완 수집
-       TR: FHKST03010100 (inquire-daily-itemchartprice), kisWebClient 사용
-    ③ 중복 날짜 필터링 후 saveAll()
-    ④ 최근 days개만 반환
+  → real 서버 전용 (TradingModeStore 제거 후 mock 분기 없음)
+  ① DB 조회 (market.daily_candles, from ~ today)
+  ② dbCandles.size() < days 이면 전체 구간(from)부터 KIS API 재조회
+     (기존: 마지막 수집일 이후 forward만 보완 → 앞쪽 공백 미해소 버그 수정)
+     TR: FHKST03010100 (inquire-daily-itemchartprice), kisWebClient 사용
+  ③ 중복 날짜 필터링 후 saveAll()
+  ④ 최근 days개만 반환
 
 collectCandle(ticker, date) — 스케줄러 전용
   → 해당 날짜 이미 수집됐으면 스킵
@@ -416,7 +406,6 @@ collectCandle(ticker, date) — 스케줄러 전용
 ```java
 @Scheduled(cron = "0 40 15 * * MON-FRI", zone = "Asia/Seoul")
 // 매일 평일 15:40 KST (장 마감 15:30 이후)
-// mock 모드이면 실행하지 않음
 ```
 
 ### `IndexCandleService.java`
@@ -428,8 +417,7 @@ collectCandle(ticker, date) — 스케줄러 전용
 
 ```
 getIndexCandles(indexCode, days)
-  → isMock() = true → getMockIndexCandles()  ← mock 모드에서만 가상 데이터 반환
-  → isMock() = false → fetchIndexFromKis()
+  → fetchIndexFromKis()  (real 전용, mock 분기 제거)
       kisTokenService.getRealAccessToken()    ← real 서버 전용 토큰
       kisRealWebClient → GET /uapi/domestic-stock/v1/quotations/inquire-index-daily-price
         tr_id: FHKUP03500100
@@ -437,8 +425,8 @@ getIndexCandles(indexCode, days)
         FID_INPUT_ISCD: 0001 or 1001
       응답 필드: stck_bsop_date, bstp_nmix_prpr(종가), bstp_nmix_oprc(시가),
                  bstp_nmix_hgpr(고가), bstp_nmix_lwpr(저가), acml_vol
-      토큰 발급 실패(real 키 미설정) → mock 데이터로 폴백
-      output2 없음 → mock 데이터로 폴백
+      토큰 발급 실패(real 키 미설정) → 빈 리스트 반환
+      output2 없음 → 빈 리스트 반환
 ```
 
 ### API 엔드포인트
@@ -499,14 +487,10 @@ order-service/
         └── application-secret.yml             ← KIS API 키 + Slack Webhook URL (gitignore)
 └── src/test/
     ├── java/com/axiom/order/
-    │   ├── fixture/
-    │   │   └── OrderMockFixture.java          ← MOCK_ORDER_ID_PATTERN 등 상수
-    │   ├── service/
-    │   │   └── KisOrderApiServiceTest.java    ← mock 주문 ID 형식 검증 (MOCK-XXXXXXXX)
     │   └── util/
-    │       └── MarketHoursCheckerTest.java    ← mock 모드 항상 true, nextMarketOpenAt 형식 검증
+    │       └── MarketHoursCheckerTest.java    ← nextMarketOpenAt 형식 검증
     └── resources/
-        └── application-test.yml               ← H2 인메모리 DB, kis.mode=mock
+        └── application-test.yml               ← H2 인메모리 DB
 ```
 
 ### `build.gradle`
@@ -621,8 +605,7 @@ GET http://localhost:8081/internal/token → { "token": "Bearer eyJ..." }
 
 ```java
 isMarketOpen()
-  mock 모드 → 항상 true (24시간 테스트 가능)
-  paper/real → KST 평일 09:00~15:30 여부 확인
+  → KST 평일 09:00~15:30 여부 확인 (real 전용, mock 분기 제거)
 
 nextMarketOpenAt()
   → 다음 평일 09:00 시각을 ISO-8601 KST 형식으로 반환
@@ -704,13 +687,8 @@ portfolio-service/
         ├── application.yml
         └── application-secret.yml               ← KIS API 키 + Slack Webhook URL (gitignore)
 └── src/test/
-    ├── java/com/axiom/portfolio/
-    │   ├── fixture/
-    │   │   └── PortfolioMockFixture.java        ← 기대 잔고 상수 (10_000_000, 5_000_000 등)
-    │   └── service/
-    │       └── KisAccountApiServiceTest.java    ← mock 잔고 키/타입/금액 검증
     └── resources/
-        └── application-test.yml                 ← H2 인메모리 DB, kis.mode=mock
+        └── application-test.yml                 ← H2 인메모리 DB
 ```
 
 ### `build.gradle`
@@ -879,10 +857,10 @@ strategy-service/
     │   │   ├── StrategyStateRepository.java    ← Spring Data JPA Repository
     │   │   └── StrategyStateStore.java         ← 트레일링 스탑/타임컷/당일매수 상태 인메모리+DB 통합 관리
     │   ├── scheduler/
-    │   │   ├── StrategyScheduler.java          ← 평일 09:05~15:20, 5분 주기
+    │   │   ├── StrategyScheduler.java          ← 평일 09:05~15:19, 5분 주기
     │   │   ├── MarketStateScheduler.java       ← 기동 시 @PostConstruct + 평일 08:30 감시 종목/시장상태 갱신
-    │   │   ├── TrailingStopScheduler.java      ← 평일 09:00~15:20, 1분 주기 트레일링 스탑 체크
-    │   │   ├── ForceExitScheduler.java         ← 평일 09:05 오버나이트 청산 + 평일 15:20 당일 강제 청산
+    │   │   ├── TrailingStopScheduler.java      ← 평일 09:00~15:19, 1분 주기 트레일링 스탑 체크
+    │   │   ├── ForceExitScheduler.java         ← 평일 09:05 오버나이트 청산 + 평일 15:19 당일 강제 청산
     │   │   └── DailySummaryCollector.java      ← 평일 15:25 일일 전략 요약 Slack 발송 + 카운터 초기화
     │   ├── service/
     │   │   ├── MarketStateService.java         ← 코스피 MA20 → BULLISH/SIDEWAYS 판별
@@ -919,7 +897,7 @@ strategy-service/
     │   └── notification/
     │       └── SlackNotifierTest.java         ← enabled=false 상태에서 예외 없이 동작 검증
     └── resources/
-        └── application-test.yml               ← kis.mode=mock, slack.enabled=false
+        └── application-test.yml               ← slack.enabled=false
 ```
 
 ### `build.gradle`
@@ -986,22 +964,41 @@ slack:
 ```java
 @Component
 public class AdminConfigStore {
-    private volatile boolean paused = false;          // 매매 중단 여부
-    private volatile int investAmountKrw;             // 1회 매수 금액 (원)
-    private volatile int maxPositions;                // 최대 동시 보유 종목 수
-    private volatile double trailingStopPct;          // 트레일링 스탑 하락 허용 폭 (%)
-    private volatile int timeCutDays;                 // 타임 컷 최대 보유 거래일
+    private volatile String strategyMode = "market-based"; // "market-based" | "all-strategies"
+    private volatile AdminSettings settings;               // 투자 설정 (중첩 포맷)
+
+    // AdminSettings 내부 필드:
+    //   paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays,
+    //   indexDropBlockPct, volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit
 
     @PostConstruct
     void init() {
         // 1) yml 기본값으로 초기화
         // 2) admin-config.json 존재 시 파일 값으로 덮어쓰기 (서비스 재시작 시 설정 복원)
+        //    구 플랫 포맷(settings 노드 없음) → 자동 마이그레이션 후 새 포맷으로 저장
     }
 
-    // 설정 변경 시 admin-config.json에 자동 저장
-    public void setPaused(boolean paused)  { this.paused = paused; saveToFile(); }
-    public void setConfig(int investAmountKrw, int maxPositions,
-                          double trailingStopPct, int timeCutDays) { ...; saveToFile(); }
+    // 설정 변경 시 admin-config.json에 자동 저장 (settings 중첩 포맷)
+    public AdminSettings getActiveSettings() { return settings; }
+    public void setPaused(boolean paused)    { settings.setPaused(paused); saveToFile(); }
+}
+```
+
+JSON 포맷 (`admin-config.json`):
+```json
+{
+  "strategyMode": "market-based",
+  "settings": {
+    "paused": false,
+    "investAmountKrw": 300000,
+    "maxPositions": 5,
+    "trailingStopPct": 7.0,
+    "timeCutDays": 3,
+    "indexDropBlockPct": 2.0,
+    "volatilityBreakoutDailyLimit": 4,
+    "goldenCrossDailyLimit": 4,
+    "bollingerDailyLimit": 4
+  }
 }
 ```
 
@@ -1009,14 +1006,15 @@ public class AdminConfigStore {
 - `admin-config.json` 위치: strategy-service 실행 디렉토리 (gitignore 적용)
 - `paused=true` 상태에서 `StrategyEngine.run()` 즉시 스킵
 - `ForceExitScheduler`는 `paused` 상태와 무관하게 항상 동작 (오버나이트 보호)
+- 구 플랫 포맷 자동 마이그레이션: `loadFromFile()`에서 `settings` 노드 없으면 플랫 필드를 읽어 새 포맷으로 변환
 
 ### `AdminController.java`
 
 ```java
-GET  /api/strategy/admin/status  → AdminStatusDto { paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays }
-POST /api/strategy/admin/pause   → paused=true, 현재 상태 반환
-POST /api/strategy/admin/resume  → paused=false, 현재 상태 반환
-PATCH /api/strategy/admin/config → AdminConfigDto { investAmountKrw?, maxPositions?, trailingStopPct?, timeCutDays? }
+GET  /api/strategy/admin/status  → AdminStatusDto { strategyMode, settings: { paused, investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct, volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit }, ... }
+POST /api/strategy/admin/pause   → settings.paused=true, 현재 상태 반환
+POST /api/strategy/admin/resume  → settings.paused=false, 현재 상태 반환
+PATCH /api/strategy/admin/config → AdminConfigDto { strategyMode?, investAmountKrw?, maxPositions?, trailingStopPct?, timeCutDays?, indexDropBlockPct?, volatilityBreakoutDailyLimit?, goldenCrossDailyLimit?, bollingerDailyLimit? }
                                    null 필드는 기존 값 유지 (partial update)
 ```
 
@@ -1064,7 +1062,7 @@ minimumCandles() = 3개
   목표가 = today.open + Range × 0.5
 
   현재가(today.close) ≥ 목표가 AND 당일 미매수 → BUY
-  전략 자체는 SELL 없음 → ForceExitScheduler(15:20)가 강제 청산
+  전략 자체는 SELL 없음 → ForceExitScheduler(15:19)가 강제 청산
 
 todayBought: ConcurrentHashMap<String, LocalDate>
   매수 시 날짜 기록 → 당일 중복 매수 방지
@@ -1087,9 +1085,17 @@ RSI (Wilder's Smoothed, 14일):
   중심선  = MA20
   upper  = MA20 + 2σ (BigDecimal.sqrt(MathContext) 사용)
   lower  = MA20 - 2σ
+  %B     = (close - lower) / (upper - lower)  [0=하단, 0.5=중심, 1=상단]
 
-BUY  조건: RSI < 30 AND close < lower  (두 지표 동시 과매도)
-SELL 조건: RSI > 70 OR close ≥ middle (과매수 OR 중심선 회귀)
+BUY 조건 (OR + 점수화 + 분할매수):
+  close < lower (BB 하단 이탈)  OR  RSI < 30 (과매도) 중 하나 이상 충족
+  → buyStage 1 (BB만 이탈): 투자금 50% 매수
+  → buyStage 2 (BB+RSI 동시 또는 RSI 단독): 투자금 나머지 50% 매수 (BollingerReserveService)
+
+SELL 조건 (%B 필터):
+  close ≥ upper            → 즉시 익절 (상단밴드 도달)
+  RSI > 70 AND %B ≥ 0.5   → 과매수 청산
+  RSI > 70 AND %B < 0.5   → HOLD (중심선 미달, 추가 상승 기대)
 ```
 
 ### `MarketStateService.java`
@@ -1164,16 +1170,16 @@ public void run() {
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` | ① market-service에서 감시 종목 목록 조회 → watchTickers 갱신<br>② 코스피 MA20 → 시장 상태 판별<br>③ Slack: 📋 감시종목 수 + 시장 상태 |
 | `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략·이력 검증 포함)<br>Slack: 🔔 종목별 매수가·결과 / 대상 없으면 "대상 없음" |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷<br>실행 결과를 `DailySummaryCollector`에 누적 |
-| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) |
-| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 강제 청산<br>Slack: 🔔 종목별 개별 알림 |
+| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:19) |
+| `0 19 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 강제 청산<br>Slack: 🔔 종목별 개별 알림 |
 | `0 25 15 * * MON-FRI` | `DailySummaryCollector` | 전략 실행 일일 요약 Slack 발송 + 카운터 초기화<br>📊 실행횟수·매수·매도·오류·스킵 종목 포함 |
 
 > 모든 스케줄러에 `zone = "Asia/Seoul"` 설정 — KST 기준으로 동작
 
 ```java
 // StrategyScheduler: cron만으로는 15:25~15:55도 실행되므로 코드로 추가 차단
-if (hour == 15 && minute > 20) return;
-// 실제 실행: 09:05, 09:10 ... 15:15, 15:20 (최대 76회/일)
+if (hour == 15 && minute > 19) return;
+// 실제 실행: 09:05, 09:10 ... 15:15, 15:19 (최대 76회/일 미만)
 ```
 
 ### `TrailingStopService.java`
@@ -1255,7 +1261,7 @@ sendTimeCut(ticker, stockName, currentPrice, elapsed, maxDays, success)
   → ⏱️ *[전략 실행 | 타임컷]* — N거래일 경과 강제 매도
 
 sendForceExit(ticker, stockName, quantity, price, success)
-  → 🔔 *[전략 실행 | 마감청산]* — 변동성 돌파 15:20 당일 청산 (종목별 개별 발송)
+  → 🔔 *[전략 실행 | 마감청산]* — 변동성 돌파 15:19 당일 청산 (종목별 개별 발송)
 
 sendSchedulerScreenerRefresh(tickerCount, marketState)
   → 📋 *[08:30 감시종목갱신]* 완료 — 감시 종목 수 + 시장 상태
@@ -1471,21 +1477,16 @@ page load
 
 ### KIS 모드 설정 패턴
 
-모든 서비스에서 동일하게 사용합니다:
+v0.5.3 이후 모든 서비스가 real 모드로 고정되었습니다. mock/paper 분기 코드는 제거되었습니다.
 
 ```yaml
 kis:
-  mode: paper  # mock | paper | real
+  mode: real  # real 고정 (mock/paper 제거)
 ```
 
 ```java
-public boolean isMock()  { return "mock".equals(mode); }
-public boolean isPaper() { return "paper".equals(mode); }
-public boolean isReal()  { return "real".equals(mode); }
-
-// 사용 예시
-if (kisApiConfig.isMock()) return getMockData();
-return getRealData();
+// KisApiConfig: getReal()로 고정 사용
+ModeConfig config = kisApiConfig.getReal();
 ```
 
 ### `@ConfigurationProperties` 패턴

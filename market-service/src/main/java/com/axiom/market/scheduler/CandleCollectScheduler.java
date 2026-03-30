@@ -1,6 +1,5 @@
 package com.axiom.market.scheduler;
 
-import com.axiom.market.config.KisApiConfig;
 import com.axiom.market.service.CandleService;
 import com.axiom.market.service.StockScreenerService;
 import lombok.RequiredArgsConstructor;
@@ -18,19 +17,12 @@ public class CandleCollectScheduler {
 
     private final CandleService candleService;
     private final StockScreenerService stockScreenerService;
-    private final KisApiConfig kisApiConfig;
 
     /**
      * 매일 15:40 KST 장 종료 후 당일 일봉 수집.
-     * mock 모드일 때는 실행하지 않음 (DB에 저장할 실제 데이터 없음).
      */
     @Scheduled(cron = "0 40 15 * * MON-FRI", zone = "Asia/Seoul")
     public void collectDailyCandles() {
-        if (kisApiConfig.isMock()) {
-            log.debug("[Scheduler] mock 모드 - 일봉 수집 스킵");
-            return;
-        }
-
         LocalDate today = LocalDate.now();
         List<String> tickers = stockScreenerService.getScreenedTickers();
         log.info("[Scheduler] 일봉 수집 시작 - date: {}, tickers: {}개", today, tickers.size());

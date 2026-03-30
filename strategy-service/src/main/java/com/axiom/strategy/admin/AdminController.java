@@ -1,6 +1,5 @@
 package com.axiom.strategy.admin;
 
-import com.axiom.strategy.client.ModeClient;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.OrderRequest;
@@ -28,7 +27,6 @@ public class AdminController {
     private final TrailingStopService trailingStopService;
     private final TimeCutService timeCutService;
     private final MarketStateService marketStateService;
-    private final ModeClient modeClient;
     private final VolatilityBreakoutStrategy volatilityBreakoutStrategy;
     private final PortfolioClient portfolioClient;
     private final OrderClient orderClient;
@@ -42,40 +40,32 @@ public class AdminController {
         return ResponseEntity.ok(currentStatus());
     }
 
-    /** 매매 중단 — targetMode 파라미터로 특정 모드만 중단 가능 */
+    /** 매매 중단 */
     @PostMapping("/pause")
-    public ResponseEntity<AdminStatusDto> pause(@RequestParam(required = false) String targetMode) {
-        adminConfigStore.setPaused(true, targetMode);
+    public ResponseEntity<AdminStatusDto> pause() {
+        adminConfigStore.setPaused(true);
         return ResponseEntity.ok(currentStatus());
     }
 
-    /** 매매 재개 — targetMode 파라미터로 특정 모드만 재개 가능 */
+    /** 매매 재개 */
     @PostMapping("/resume")
-    public ResponseEntity<AdminStatusDto> resume(@RequestParam(required = false) String targetMode) {
-        adminConfigStore.setPaused(false, targetMode);
+    public ResponseEntity<AdminStatusDto> resume() {
+        adminConfigStore.setPaused(false);
         return ResponseEntity.ok(currentStatus());
     }
 
-    /** 투자 설정 변경 (부분 업데이트 허용) — tradingMode 필드로 모드 전환 가능 */
+    /** 투자 설정 변경 (부분 업데이트 허용) */
     @PatchMapping("/config")
     public ResponseEntity<AdminStatusDto> updateConfig(@RequestBody AdminConfigDto dto) {
-        // 모드 전환 요청 처리
-        if (dto.tradingMode() != null) {
-            adminConfigStore.setTradingMode(dto.tradingMode());
-            modeClient.propagateTradingMode(dto.tradingMode());
-        }
         if (dto.strategyMode() != null) {
             adminConfigStore.setStrategyMode(dto.strategyMode());
         }
 
-        // 설정 변경 요청 처리 (tradingMode만 있고 설정 필드가 없으면 스킵)
         boolean hasSettingFields = dto.investAmountKrw() != null || dto.maxPositions() != null
                 || dto.trailingStopPct() != null || dto.timeCutDays() != null || dto.indexDropBlockPct() != null
                 || dto.volatilityBreakoutDailyLimit() != null || dto.goldenCrossDailyLimit() != null || dto.bollingerDailyLimit() != null;
         if (hasSettingFields) {
-            String target = dto.targetMode(); // null이면 active 모드
-            AdminConfigStore.ModeSettings current = adminConfigStore.getSettings(
-                    target != null ? target : adminConfigStore.getTradingMode());
+            AdminConfigStore.ModeSettings current = adminConfigStore.getSettings();
 
             int    newInvest    = dto.investAmountKrw()                != null ? dto.investAmountKrw()                : current.investAmountKrw();
             int    newMaxPos    = dto.maxPositions()                   != null ? dto.maxPositions()                   : current.maxPositions();
@@ -85,7 +75,7 @@ public class AdminController {
             int    newVolDaily  = dto.volatilityBreakoutDailyLimit()   != null ? dto.volatilityBreakoutDailyLimit()   : current.volatilityBreakoutDailyLimit();
             int    newGcDaily   = dto.goldenCrossDailyLimit()          != null ? dto.goldenCrossDailyLimit()          : current.goldenCrossDailyLimit();
             int    newBollDaily = dto.bollingerDailyLimit()            != null ? dto.bollingerDailyLimit()            : current.bollingerDailyLimit();
-            adminConfigStore.setConfig(target, newInvest, newMaxPos, newTs, newTc, newIdx, newVolDaily, newGcDaily, newBollDaily);
+            adminConfigStore.setConfig(newInvest, newMaxPos, newTs, newTc, newIdx, newVolDaily, newGcDaily, newBollDaily);
         }
 
         return ResponseEntity.ok(currentStatus());
@@ -106,15 +96,14 @@ public class AdminController {
     /** 미체결 매수 정리 — 매도 없이 인메모리+DB 상태만 초기화 */
     @PostMapping("/cleanup-tickers")
     public ResponseEntity<Map<String, String>> cleanupTickers(@RequestBody CleanupTickersRequest req) {
-        String mode = req.mode() != null ? req.mode() : adminConfigStore.getTradingMode();
         Map<String, String> result = new LinkedHashMap<>();
         for (String ticker : req.tickers()) {
             try {
-                volatilityBreakoutStrategy.removeTodayBought(ticker, mode);
-                strategyStateStore.removeBuyStage(ticker, mode);
-                strategyStateStore.removeEntryTag(ticker, mode);
-                timeCutService.clearBuy(ticker, mode);
-                trailingStopService.removePeak(ticker, mode);
+                volatilityBreakoutStrategy.removeTodayBought(ticker);
+                strategyStateStore.removeBuyStage(ticker);
+                strategyStateStore.removeEntryTag(ticker);
+                timeCutService.clearBuy(ticker);
+                trailingStopService.removePeak(ticker);
                 bollingerReserveService.clear(ticker);
                 result.put(ticker, "OK");
             } catch (Exception e) {
@@ -127,16 +116,15 @@ public class AdminController {
     /** MTS/외부 경로로 이미 매도된 종목 — 포트폴리오 DB + 전략 상태 정리 (KIS 주문 없음) */
     @PostMapping("/mark-sold")
     public ResponseEntity<Map<String, String>> markSold(@RequestBody CleanupTickersRequest req) {
-        String mode = req.mode() != null ? req.mode() : adminConfigStore.getTradingMode();
         Map<String, String> result = new LinkedHashMap<>();
         for (String ticker : req.tickers()) {
             try {
-                portfolioClient.deletePosition(ticker, mode);
-                volatilityBreakoutStrategy.removeTodayBought(ticker, mode);
-                strategyStateStore.removeBuyStage(ticker, mode);
-                strategyStateStore.removeEntryTag(ticker, mode);
-                timeCutService.clearBuy(ticker, mode);
-                trailingStopService.removePeak(ticker, mode);
+                portfolioClient.deletePosition(ticker);
+                volatilityBreakoutStrategy.removeTodayBought(ticker);
+                strategyStateStore.removeBuyStage(ticker);
+                strategyStateStore.removeEntryTag(ticker);
+                timeCutService.clearBuy(ticker);
+                trailingStopService.removePeak(ticker);
                 bollingerReserveService.clear(ticker);
                 dailySellBlockService.markSoldToday(ticker);
                 result.put(ticker, "OK");
@@ -165,11 +153,10 @@ public class AdminController {
             OrderResult orderResult = orderClient.sellWithRetry(sellOrder);
             result.put(position.getTicker(), orderResult.success());
             if (orderResult.success()) {
-                String mode = adminConfigStore.getTradingMode();
-                volatilityBreakoutStrategy.removeTodayBought(position.getTicker(), mode);
+                volatilityBreakoutStrategy.removeTodayBought(position.getTicker());
                 dailySellBlockService.markSoldToday(position.getTicker());
                 timeCutService.clearBuy(position.getTicker());
-                trailingStopService.removePeak(position.getTicker(), mode);
+                trailingStopService.removePeak(position.getTicker());
                 bollingerReserveService.clear(position.getTicker());
             }
         }
@@ -178,19 +165,13 @@ public class AdminController {
     }
 
     private AdminStatusDto currentStatus() {
-        AdminConfigStore.ModeSettings paper = adminConfigStore.getPaperSettings();
-        AdminConfigStore.ModeSettings real  = adminConfigStore.getRealSettings();
+        AdminConfigStore.ModeSettings s = adminConfigStore.getSettings();
         return new AdminStatusDto(
-                adminConfigStore.getTradingMode(),
                 adminConfigStore.getStrategyMode(),
                 new AdminStatusDto.ModeSettingsDto(
-                        paper.paused(), paper.investAmountKrw(), paper.maxPositions(),
-                        paper.trailingStopPct(), paper.timeCutDays(), paper.indexDropBlockPct(),
-                        paper.volatilityBreakoutDailyLimit(), paper.goldenCrossDailyLimit(), paper.bollingerDailyLimit()),
-                new AdminStatusDto.ModeSettingsDto(
-                        real.paused(), real.investAmountKrw(), real.maxPositions(),
-                        real.trailingStopPct(), real.timeCutDays(), real.indexDropBlockPct(),
-                        real.volatilityBreakoutDailyLimit(), real.goldenCrossDailyLimit(), real.bollingerDailyLimit()),
+                        s.paused(), s.investAmountKrw(), s.maxPositions(),
+                        s.trailingStopPct(), s.timeCutDays(), s.indexDropBlockPct(),
+                        s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit()),
                 marketStateService.isIndexDropBlockedToday(),
                 marketStateService.isIndexDropCheckedToday(),
                 bollingerReserveService.getAllReservations()

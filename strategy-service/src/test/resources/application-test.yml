@@ -9,19 +9,6 @@ spring:
       ddl-auto: create-drop
     database-platform: org.hibernate.dialect.H2Dialect
 
-kis:
-  mode: mock
-  paper:
-    base-url: http://localhost
-    app-key: TEST_KEY
-    app-secret: TEST_SECRET
-    account-no: 12345678-01
-  real:
-    base-url: http://localhost
-    app-key: TEST_KEY
-    app-secret: TEST_SECRET
-    account-no: 12345678-01
-
 strategy:
   watch-tickers:
     - "005930"

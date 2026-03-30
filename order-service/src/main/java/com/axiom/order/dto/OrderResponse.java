@@ -24,10 +24,9 @@ public class OrderResponse {
     private String strategyName;
     private String marketState;
     private String closeReason;
-    private String tradingMode;
     private LocalDateTime createdAt;
     private LocalDateTime filledAt;
-    private boolean mock;
+    private String failureReason;
 
     public static OrderResponse from(TradeOrder order) {
         return OrderResponse.builder()
@@ -43,9 +42,9 @@ public class OrderResponse {
                 .strategyName(order.getStrategyName())
                 .marketState(order.getMarketState())
                 .closeReason(order.getCloseReason())
-                .tradingMode(order.getTradingMode())
                 .createdAt(order.getCreatedAt())
                 .filledAt(order.getFilledAt())
+                .failureReason(order.getFailureReason())
                 .build();
     }
 }

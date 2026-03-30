@@ -7,9 +7,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(
-    name = "portfolio", schema = "portfolio",
-    uniqueConstraints = @UniqueConstraint(name = "UK_ticker_mode", columnNames = {"ticker", "trading_mode"})
+@Table(name = "portfolio", schema = "portfolio",
+    uniqueConstraints = @UniqueConstraint(name = "UK_ticker", columnNames = {"ticker"})
 )
 @Getter
 @Setter
@@ -32,13 +31,10 @@ public class Portfolio {
     private Integer quantity;
 
     @Column(nullable = false, precision = 15, scale = 2)
-    private BigDecimal avgPrice;       // 평균 매수 단가
+    private BigDecimal avgPrice;
 
     @Column(nullable = false, precision = 15, scale = 2)
-    private BigDecimal totalInvest;    // 총 투자금액
-
-    @Column(name = "trading_mode", length = 10)
-    private String tradingMode;        // "paper" | "real"
+    private BigDecimal totalInvest;
 
     @Column(nullable = false)
     private LocalDateTime updatedAt;

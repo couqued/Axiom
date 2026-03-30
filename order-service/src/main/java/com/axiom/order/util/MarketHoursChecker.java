@@ -1,7 +1,5 @@
 package com.axiom.order.util;
 
-import com.axiom.order.config.KisApiConfig;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
@@ -11,7 +9,6 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 
 @Component
-@RequiredArgsConstructor
 public class MarketHoursChecker {
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
@@ -20,11 +17,8 @@ public class MarketHoursChecker {
     private static final DateTimeFormatter DT_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
 
-    private final KisApiConfig kisApiConfig;
-
-    /** mock 모드이면 항상 열림, 그 외에는 KST 평일 09:00~15:30 여부 반환 */
+    /** KST 평일 09:00~15:30 여부 반환 */
     public boolean isMarketOpen() {
-        if (kisApiConfig.isMock()) return true;
         ZonedDateTime now = ZonedDateTime.now(KST);
         DayOfWeek day = now.getDayOfWeek();
         if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) return false;

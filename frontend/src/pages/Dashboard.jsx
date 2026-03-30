@@ -64,14 +64,7 @@ export default function Dashboard() {
 
   return (
     <div className="page">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-        <h2 style={{ margin: 0 }}>대시보드</h2>
-        {adminConfig && (
-          <span className={`mode-badge ${adminConfig.tradingMode ?? 'paper'}`}>
-            {(adminConfig.tradingMode ?? 'paper') === 'paper' ? '모의투자' : '운영'}
-          </span>
-        )}
-      </div>
+      <h2 style={{ marginBottom: '4px' }}>대시보드</h2>
 
       <div className="balance-card">
         <div className="balance-row">

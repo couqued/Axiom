@@ -42,7 +42,7 @@
     ② 코스피 종가 > MA20 → BULLISH (상승장)
        코스피 종가 ≤ MA20 → SIDEWAYS (횡보장)
 
-[09:05~15:20 5분 주기] 전략 실행
+[09:05~15:19 5분 주기] 전략 실행
     ↓
   BULLISH  → 변동성 돌파 + 골든크로스 (동시 실행)
   SIDEWAYS → RSI + 볼린저밴드 통합 전략
@@ -226,12 +226,12 @@ initFromDb() (@PostConstruct)
 
 `ForceExitScheduler`는 두 가지 청산 스케줄을 실행합니다.
 
-#### ① 당일 마감 청산 (15:20)
+#### ① 당일 마감 청산 (15:19)
 
-매일 **15:20**에 변동성 돌파로 당일 매수한 포지션을 강제 청산합니다.
+매일 **15:19**에 변동성 돌파로 당일 매수한 포지션을 강제 청산합니다.
 
 ```
-forceExit() — cron: 0 20 15 * * MON-FRI
+forceExit() — cron: 0 19 15 * * MON-FRI
   → todayBought에서 오늘 날짜와 일치하는 종목 추출
   → portfolio-service에서 실제 보유 여부 확인
   → 보유 중이면 SELL 주문 + Slack 알림
@@ -240,7 +240,7 @@ forceExit() — cron: 0 20 15 * * MON-FRI
 
 #### ② 오버나이트 미청산 익일 청산 (09:05)
 
-서비스 재시작 등으로 15:20 청산이 누락된 경우, 다음 거래일 **09:05**에 보완 청산합니다.
+서비스 재시작 등으로 15:19 청산이 누락된 경우, 다음 거래일 **09:05**에 보완 청산합니다.
 
 ```
 exitOvernightPositions() — cron: 0 5 9 * * MON-FRI
@@ -306,17 +306,42 @@ RSI = 100 - (100 / (1 + RS))
 
 ### 신호 조건
 
-| 신호 | 조건 |
+#### BUY — OR 조건 + 점수화 + 분할매수 (buyStage)
+
+| 조건 | buyStage | 매수 비율 |
+|------|----------|-----------|
+| 종가 < 하단밴드만 충족 (RSI ≥ 30) | 1단계 | 투자금 50% |
+| RSI < 30 AND 종가 < 하단밴드 (동시) | 2단계 | 투자금 나머지 50% |
+| RSI < 30만 충족 (종가 ≥ 하단밴드) | 2단계 | 투자금 나머지 50% |
+
+```
+BB 하단 이탈 깊이 점수 = min((lower - close) / close × 100 / 5, 1) × 50  ← 최대 50점 (5% 이탈)
+RSI 과매도 깊이 점수  = min((30 - RSI) / 30, 1) × 50                    ← 최대 50점 (RSI=0이면 50점)
+총점 = BB 점수 + RSI 점수                                                  ← 최대 100점
+```
+
+- 1단계 매수 후 2단계 진입 조건 충족 시 `BollingerReserveService`가 나머지 금액 자동 추가 매수 예약
+
+#### SELL — %B 필터
+
+| 조건 | 처리 |
 |------|------|
-| **BUY** | RSI(14) < 30 **AND** 현재 종가 < 하단밴드 |
-| **SELL** | RSI(14) > 70 **OR** 현재 종가 ≥ 중심선(MA20) |
-| HOLD | 그 외 |
+| 종가 ≥ 상단밴드(Upper) | 즉시 익절 (상단선 도달) |
+| RSI > 70 AND %B ≥ 0.5 | 과매수 청산 |
+| RSI > 70 AND %B < 0.5 | **HOLD** (중심선 미달, 추가 상승 기대) |
+| 그 외 | HOLD |
+
+```
+%B = (현재가 - 하단밴드) / (상단밴드 - 하단밴드)
+     0 = 하단밴드,  0.5 = 중심선(MA20),  1 = 상단밴드
+```
 
 ### 전략 원리
 
-- **BUY**: RSI 과매도(< 30) **동시에** 볼린저밴드 하단 이탈 → 두 지표가 동시에 과매도를 확인 → 허위 신호 최소화
-- **SELL(RSI 과매수)**: RSI > 70 → 단기 과열 상태에서 차익 실현
-- **SELL(중심선 회귀)**: 횡보장 특성상 하단→중심선 반등이 목표 — 중심선 도달 시 익절
+- **BUY (OR + 점수화)**: RSI 과매도 또는 BB 하단 이탈 중 하나만 충족해도 1단계 진입 허용. 두 조건 동시 충족 시 과매도 심화(2단계)로 분할 추가 매수 → 허위 신호는 소액(50%)으로 제한, 진짜 신호는 풀포지션
+- **SELL(상단밴드 도달)**: BB 상단까지 반등 완료 → 즉시 익절
+- **SELL(RSI 과매수 + %B 필터)**: RSI > 70이어도 %B < 0.5(중심선 미달)이면 HOLD — 밴드 위쪽에서 더 오를 여지가 있다고 판단
+- **RSI 과매수 HOLD 알림**: `SlackNotifier.sendRsiOverboughtHold()` — 종목당 1일 1회 Slack 알림
 
 ---
 
@@ -434,7 +459,7 @@ GET /api/strategy/admin/time-cut-status
 ### 동작 방식
 
 ```
-StrategyEngine.run() (09:05~15:20 매 5분)
+StrategyEngine.run() (09:05~15:19 매 5분)
   ↓
 Phase 1.5 — BUY 가드
 
@@ -477,10 +502,10 @@ Admin UI → "지수 하락 매수차단 (%)" → `0` 입력 → 설정 저장
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 | 📋 감시종목 수 + 시장 상태 |
 | `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략 검증 포함) | 🔔 종목별 매수가·매도 주문가 포함 / 대상 없으면 "대상 없음" |
 | `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 | — (15:25 일일 요약으로 취합) |
-| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:20) | — (발동 시만 🛑 알림) |
+| `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:19) | — (발동 시만 🛑 알림) |
 | `0 0 10-15 * * MON-FRI` | `StrategyScheduler` | 직전 1시간 실행 요약 Slack 발송 | 🕐 시간별 요약 |
 | `0 22 15 * * MON-FRI` | `StrategyScheduler` | 15시대 실행 요약 Slack 발송 | 🕐 시간별 요약 (15시) |
-| `0 20 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 | 🔔 종목별 개별 알림 |
+| `0 19 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 | 🔔 종목별 개별 알림 |
 | `0 25 15 * * MON-FRI` | `DailySummaryCollector` | 전략 실행 일일 요약 발송 + 카운터 초기화 | 📊 일일 요약 (실행횟수·매수·매도·스킵 종목 포함) |
 | `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) | — |
 
@@ -511,24 +536,25 @@ Admin UI → "지수 하락 매수차단 (%)" → `0` 입력 → 설정 저장
 #### 15:25 전략 일일 요약
 ```
 📊 [전략 일일 요약] 2026-03-09
-> 실행 횟수: 75회 (09:05 ~ 15:20)
+> 실행 횟수: 75회 (09:05 ~ 15:19)
 > 평가 종목: 107개 × 75회
 > 매수: 2건  |  매도: 1건  |  오류: 0건
 > 스킵(시장경보): 1건  |  스킵(최대보유): 3건
 > 매수 종목: 삼성전자 (005930) 78,900원, SK하이닉스 (000660) 195,000원
 > 매도 종목: NAVER (035420) 212,000원
-> 스킵 종목: 카카오 (035720)(시장경보), 현대차 (005380)(최대보유)
 ```
+
+> v0.6.1부터 스킵 종목 목록은 일일 요약에서 제거됩니다 (가독성 개선).
 
 `DailySummaryCollector`가 `StrategyScheduler` 실행마다 `RunResult`를 누적하고, 15:25에 한 번에 발송 후 카운터를 초기화합니다.
 
 ### StrategyScheduler 상세
 
-`0 5/5 9-15 * * MON-FRI` cron은 09:05, 09:10 ... 15:55까지 실행을 시도합니다. 코드로 15:20 이후를 추가 차단합니다:
+`0 5/5 9-15 * * MON-FRI` cron은 09:05, 09:10 ... 15:55까지 실행을 시도합니다. 코드로 15:19 이후를 추가 차단합니다:
 
 ```java
-if (hour == 15 && minute > 20) return;
-// 실제 실행: 09:05, 09:10 ... 15:15, 15:20 (최대 76회/일)
+if (hour == 15 && minute > 19) return;
+// 실제 실행: 09:05, 09:10 ... 15:15 (15:20 미만)
 ```
 
 ---
@@ -540,52 +566,43 @@ if (hour == 15 && minute > 20) return;
 `application.yml` 재시작 없이 실시간으로 매매 동작을 변경할 수 있습니다.
 
 ```bash
-# 매매 긴급 정지 (특정 모드만, ?targetMode 없으면 active 모드)
+# 매매 긴급 정지
 POST http://localhost:8084/api/strategy/admin/pause
-POST http://localhost:8084/api/strategy/admin/pause?targetMode=paper
-POST http://localhost:8084/api/strategy/admin/pause?targetMode=real
 
 # 매매 재개
 POST http://localhost:8084/api/strategy/admin/resume
-POST http://localhost:8084/api/strategy/admin/resume?targetMode=paper
 
-# 투자 설정 변경 (null 필드는 기존 값 유지, targetMode 없으면 active 모드 설정)
+# 투자 설정 변경 (null 필드는 기존 값 유지)
 PATCH http://localhost:8084/api/strategy/admin/config
 {
-  "targetMode": "paper",
   "investAmountKrw": 300000,
-  "maxPositions": 4,
-  "bollingerMaxPositions": 2,
-  "trailingStopPct": 5.0,
-  "timeCutDays": 5,
-  "indexDropBlockPct": 1.0
+  "maxPositions": 5,
+  "trailingStopPct": 7.0,
+  "timeCutDays": 3,
+  "indexDropBlockPct": 2.0,
+  "volatilityBreakoutDailyLimit": 4,
+  "goldenCrossDailyLimit": 4,
+  "bollingerDailyLimit": 4
 }
 
-# 거래 모드 전환 (paper ↔ real)
+# 전략 모드 전환
 PATCH http://localhost:8084/api/strategy/admin/config
-{ "tradingMode": "real" }
+{ "strategyMode": "all-strategies" }   # "market-based" | "all-strategies"
 
 # 현재 설정 조회
 GET http://localhost:8084/api/strategy/admin/status
 → {
-    "tradingMode": "paper",
-    "paper": {
+    "strategyMode": "market-based",
+    "settings": {
       "paused": false,
-      "investAmountKrw": 500000,
-      "maxPositions": 4,
-      "bollingerMaxPositions": 2,
+      "investAmountKrw": 300000,
+      "maxPositions": 5,
       "trailingStopPct": 7.0,
       "timeCutDays": 3,
-      "indexDropBlockPct": 1.0
-    },
-    "real": {
-      "paused": false,
-      "investAmountKrw": 1000000,
-      "maxPositions": 4,
-      "bollingerMaxPositions": 2,
-      "trailingStopPct": 7.0,
-      "timeCutDays": 3,
-      "indexDropBlockPct": 1.0
+      "indexDropBlockPct": 2.0,
+      "volatilityBreakoutDailyLimit": 4,
+      "goldenCrossDailyLimit": 4,
+      "bollingerDailyLimit": 4
     },
     "indexDropBlockedToday": false,
     "indexDropCheckedToday": false
@@ -594,6 +611,7 @@ GET http://localhost:8084/api/strategy/admin/status
 
 설정은 `admin-config.json`에 자동 저장되어 서비스 재시작 후에도 유지됩니다.
 파일이 없으면 `application.yml`의 기본값으로 초기화됩니다.
+구 플랫 포맷(`admin-config.json`)이 존재하면 서비스 기동 시 자동으로 새 `settings` 중첩 포맷으로 마이그레이션됩니다.
 
 > **우선순위:** `admin-config.json` > `application.yml` 기본값
 
@@ -601,21 +619,18 @@ GET http://localhost:8084/api/strategy/admin/status
 
 | 항목 | 필드 | yml 기본값 | 적용 시점 |
 |------|------|-----------|----------|
-| 거래 모드 | `tradingMode` | `"paper"` | 즉시 |
-| (paper) 1회 매수금액 | `paper.investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
-| (real) 1회 매수금액 | `real.investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
-| (paper) 최대 보유 종목 수 | `paper.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
-| (real) 최대 보유 종목 수 | `real.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
-| (paper) 볼린저 그룹 슬롯 수 | `paper.bollingerMaxPositions` | `maxPositions / 2` (최소 1) | 다음 5분 사이클 |
-| (real) 볼린저 그룹 슬롯 수 | `real.bollingerMaxPositions` | `maxPositions / 2` (최소 1) | 다음 5분 사이클 |
-| (paper) 트레일링 스탑 % | `paper.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
-| (real) 트레일링 스탑 % | `real.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
-| (paper) 타임 컷 거래일 | `paper.timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
-| (real) 타임 컷 거래일 | `real.timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
-| (paper) 지수 하락 매수차단 % | `paper.indexDropBlockPct` | `1.0` (하드코딩) | 다음 5분 사이클 |
-| (real) 지수 하락 매수차단 % | `real.indexDropBlockPct` | `1.0` (하드코딩) | 다음 5분 사이클 |
-| (paper) 매매 중단 여부 | `paper.paused` | `false` | 즉시 |
-| (real) 매매 중단 여부 | `real.paused` | `false` | 즉시 |
+| 전략 모드 | `strategyMode` | `"market-based"` | 즉시 |
+| 매매 중단 여부 | `settings.paused` | `false` | 즉시 |
+| 1회 매수금액 | `settings.investAmountKrw` | `position-sizing.invest-amount-krw` | 다음 5분 사이클 |
+| 최대 보유 종목 수 | `settings.maxPositions` | `position-sizing.max-positions` | 다음 5분 사이클 |
+| 트레일링 스탑 % | `settings.trailingStopPct` | `trailing-stop.stop-percent` | 다음 5분 사이클 |
+| 타임 컷 거래일 | `settings.timeCutDays` | `time-cut.max-holding-days` | 다음 5분 사이클 |
+| 지수 하락 매수차단 % | `settings.indexDropBlockPct` | `1.0` (하드코딩) | 다음 5분 사이클 |
+| 변동성 돌파 일일 매수 한도 | `settings.volatilityBreakoutDailyLimit` | `4` | 다음 5분 사이클 |
+| 골든크로스 일일 매수 한도 | `settings.goldenCrossDailyLimit` | `4` | 다음 5분 사이클 |
+| 볼린저 일일 매수 한도 | `settings.bollingerDailyLimit` | `4` | 다음 5분 사이클 |
+
+> **`strategyMode`**: `"market-based"` — 시장 상태(BULLISH/SIDEWAYS)에 따라 전략 자동 선택 / `"all-strategies"` — 시장 상태 무관하게 활성화된 전략 전체 실행
 
 ### application.yml 전체 예시
 

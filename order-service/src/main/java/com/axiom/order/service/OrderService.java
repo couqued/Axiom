@@ -1,11 +1,13 @@
 package com.axiom.order.service;
 
+import com.axiom.order.client.PortfolioClient;
 import com.axiom.order.dto.OrderRequest;
 import com.axiom.order.dto.OrderResponse;
+import com.axiom.order.dto.PortfolioItemDto;
 import com.axiom.order.entity.TradeOrder;
+import com.axiom.order.entity.TradeOrder.OrderType;
 import com.axiom.order.kafka.OrderEventProducer;
 import com.axiom.order.repository.TradeOrderRepository;
-import com.axiom.order.store.TradingModeStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -13,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -24,7 +27,7 @@ public class OrderService {
     private final TradeOrderRepository orderRepository;
     private final KisOrderApiService kisOrderApiService;
     private final OrderEventProducer orderEventProducer;
-    private final TradingModeStore tradingModeStore;
+    private final PortfolioClient portfolioClient;
 
     @Transactional
     public OrderResponse placeOrder(OrderRequest request) {
@@ -42,7 +45,6 @@ public class OrderService {
                 .strategyName(request.getStrategyName())
                 .marketState(request.getMarketState())
                 .closeReason(request.getCloseReason())
-                .tradingMode(tradingModeStore.getMode())
                 .build();
 
         order = orderRepository.save(order);
@@ -60,13 +62,13 @@ public class OrderService {
             order = orderRepository.save(order);
 
             orderEventProducer.publishOrderFilled(order);
-            log.info("주문 체결 완료 - orderId: {}, ticker: {}, mode: {}",
-                    order.getId(), order.getTicker(), order.getTradingMode());
+            log.info("주문 체결 완료 - orderId: {}, ticker: {}", order.getId(), order.getTicker());
 
         } catch (Exception e) {
             order.setStatus(TradeOrder.OrderStatus.FAILED);
+            order.setFailureReason(e.getMessage());
             orderRepository.save(order);
-            log.error("주문 실패 - orderId: {}, error: {}", order.getId(), e.getMessage());
+            log.error("주문 실패 - orderId: {}, error: {}", order.getId(), e.getMessage(), e);
         }
 
         return OrderResponse.from(order);
@@ -78,15 +80,6 @@ public class OrderService {
                 .collect(Collectors.toList());
     }
 
-    public List<OrderResponse> getOrdersByMode(String mode) {
-        if (mode == null || mode.isBlank()) {
-            return getAllOrders();
-        }
-        return orderRepository.findByTradingModeOrderByCreatedAtDesc(mode).stream()
-                .map(OrderResponse::from)
-                .collect(Collectors.toList());
-    }
-
     public List<OrderResponse> getOrdersByTicker(String ticker) {
         return orderRepository.findByTickerOrderByCreatedAtDesc(ticker).stream()
                 .map(OrderResponse::from)
@@ -94,7 +87,24 @@ public class OrderService {
     }
 
     @Transactional
-    public void deleteByTicker(String ticker, String mode) {
-        orderRepository.deleteByTickerAndTradingMode(ticker, mode);
+    public void deleteByTicker(String ticker) {
+        orderRepository.deleteByTicker(ticker);
+    }
+
+    public List<OrderResponse> sellAll() {
+        List<PortfolioItemDto> positions = portfolioClient.getPositions();
+        List<OrderResponse> results = new ArrayList<>();
+        for (PortfolioItemDto p : positions) {
+            OrderRequest req = new OrderRequest();
+            req.setTicker(p.getTicker());
+            req.setStockName(p.getStockName());
+            req.setOrderType(OrderType.SELL);
+            req.setQuantity(p.getQuantity());
+            req.setPrice(BigDecimal.ZERO);
+            req.setCloseReason("FORCE_EXIT");
+            results.add(placeOrder(req));
+        }
+        log.info("[sellAll] 종목 수: {}", results.size());
+        return results;
     }
 }

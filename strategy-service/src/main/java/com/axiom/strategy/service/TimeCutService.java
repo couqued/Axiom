@@ -29,8 +29,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>RSI+볼린저 전략으로 매수한 뒤, 설정된 거래일 수(기본 3일) 이내에
  * 매도 조건이 충족되지 않으면 기계적으로 손절한다.
- *
- * <p>buyDates 맵 키 형식: "{tradingMode}:{ticker}" (e.g. "paper:005930")
  */
 @Slf4j
 @Service
@@ -44,20 +42,18 @@ public class TimeCutService {
     private final SlackNotifier slackNotifier;
     private final StrategyStateStore stateStore;
 
-    /** "{tradingMode}:{ticker}" → 매수일 */
+    /** ticker → 매수일 */
     private final Map<String, LocalDate> buyDates = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void initFromOrders() {
         if (!strategyConfig.getTimeCut().isEnabled()) return;
-        for (String mode : List.of("paper", "real")) {
-            try {
-                Map<String, LocalDate> fromDb = stateStore.loadAllBuyDates(mode);
-                fromDb.forEach((ticker, date) -> buyDates.put(key(mode, ticker), date));
-                log.info("[TimeCut] DB에서 buyDates 복구 — mode={}, {}개", mode, fromDb.size());
-            } catch (Exception e) {
-                log.warn("[TimeCut] DB buyDates 복구 실패 (mode={}): {}", mode, e.getMessage());
-            }
+        try {
+            Map<String, LocalDate> fromDb = stateStore.loadAllBuyDates();
+            buyDates.putAll(fromDb);
+            log.info("[TimeCut] DB에서 buyDates 복구 — {}개", fromDb.size());
+        } catch (Exception e) {
+            log.warn("[TimeCut] DB buyDates 복구 실패: {}", e.getMessage());
         }
     }
 
@@ -66,32 +62,22 @@ public class TimeCutService {
         if (!config.isEnabled()) return;
         if (!config.getApplicableStrategies().contains(strategyName)) return;
 
-        String mode = adminConfigStore.getTradingMode();
         LocalDate today = LocalDate.now(TradingCalendar.KST);
-        buyDates.put(key(mode, ticker), today);
-        stateStore.saveBuyDate(ticker, today, mode);
-        log.info("[TimeCut][{}] 매수 기록 — ticker: {}, strategy: {}, date: {}",
-                mode, ticker, strategyName, today);
+        buyDates.put(ticker, today);
+        stateStore.saveBuyDate(ticker, today);
+        log.info("[TimeCut] 매수 기록 — ticker: {}, strategy: {}, date: {}", ticker, strategyName, today);
     }
 
     public void clearBuy(String ticker) {
-        String mode = adminConfigStore.getTradingMode();
-        buyDates.remove(key(mode, ticker));
-        stateStore.removeBuyDate(ticker, mode);
-    }
-
-    public void clearBuy(String ticker, String mode) {
-        buyDates.remove(key(mode, ticker));
-        stateStore.removeBuyDate(ticker, mode);
+        buyDates.remove(ticker);
+        stateStore.removeBuyDate(ticker);
     }
 
     public void checkAndCut(String ticker, BigDecimal currentPrice, List<PortfolioItemDto> positions, BigDecimal ma5) {
         StrategyConfig.TimeCutConfig config = strategyConfig.getTimeCut();
         if (!config.isEnabled()) return;
 
-        String mode = adminConfigStore.getTradingMode();
-        String mapKey = key(mode, ticker);
-        LocalDate buyDate = buyDates.get(mapKey);
+        LocalDate buyDate = buyDates.get(ticker);
         if (buyDate == null) return;
 
         Optional<PortfolioItemDto> positionOpt = positions.stream()
@@ -99,8 +85,8 @@ public class TimeCutService {
                 .findFirst();
 
         if (positionOpt.isEmpty()) {
-            buyDates.remove(mapKey);
-            stateStore.removeBuyDate(ticker, mode);
+            buyDates.remove(ticker);
+            stateStore.removeBuyDate(ticker);
             return;
         }
 
@@ -109,9 +95,9 @@ public class TimeCutService {
         // entryTag가 applicableStrategies에 없으면 잘못 등록된 BUY_DATE 제거 후 스킵
         String entryTag = position.getEntryTag();
         if (entryTag != null && !config.getApplicableStrategies().contains(entryTag)) {
-            log.info("[TimeCut][{}] 전략 미해당 BUY_DATE 제거 — ticker: {}, entryTag: {}", mode, ticker, entryTag);
-            buyDates.remove(mapKey);
-            stateStore.removeBuyDate(ticker, mode);
+            log.info("[TimeCut] 전략 미해당 BUY_DATE 제거 — ticker: {}, entryTag: {}", ticker, entryTag);
+            buyDates.remove(ticker);
+            stateStore.removeBuyDate(ticker);
             return;
         }
 
@@ -134,27 +120,23 @@ public class TimeCutService {
 
             if (shouldCut) {
                 String reason = isBelowMa5 ? "MA5 하회" : String.format("수익률 저조(%.1f%%)", profitRate);
-                log.warn("[TimeCut][{}] 타임 컷 발동 — {} | 사유: {} | 경과: {}일", mode, ticker, reason, elapsed);
+                log.warn("[TimeCut] 타임 컷 발동 — {} | 사유: {} | 경과: {}일", ticker, reason, elapsed);
                 boolean sold = executeSell(ticker, currentPrice, positions, elapsed, maxDays);
                 if (sold) {
-                    buyDates.remove(mapKey);
-                    stateStore.removeBuyDate(ticker, mode);
+                    buyDates.remove(ticker);
+                    stateStore.removeBuyDate(ticker);
                 }
             } else {
-                log.info("[TimeCut][{}] 조건 만족으로 홀딩 연장 — {} | 수익률: {}%, MA5: {}", 
-                        mode, ticker, String.format("%.1f", profitRate), ma5);
+                log.info("[TimeCut] 조건 만족으로 홀딩 연장 — {} | 수익률: {}%, MA5: {}",
+                        ticker, String.format("%.1f", profitRate), ma5);
             }
         }
     }
 
     public Map<String, TimeCutStatusDto> getStatus() {
-        String mode = adminConfigStore.getTradingMode();
-        String prefix = mode + ":";
         int maxDays = adminConfigStore.getTimeCutDays();
         Map<String, TimeCutStatusDto> result = new HashMap<>();
-        buyDates.forEach((mapKey, buyDate) -> {
-            if (!mapKey.startsWith(prefix)) return;
-            String ticker = mapKey.substring(prefix.length());
+        buyDates.forEach((ticker, buyDate) -> {
             int elapsed   = TradingCalendar.tradingDaysBetween(buyDate, LocalDate.now(TradingCalendar.KST));
             int remaining = Math.max(0, maxDays - elapsed);
             result.put(ticker, new TimeCutStatusDto(buyDate, elapsed, remaining));
@@ -182,9 +164,5 @@ public class TimeCutService {
                     return result.success();
                 })
                 .orElse(false);
-    }
-
-    private String key(String mode, String ticker) {
-        return mode + ":" + ticker;
     }
 }

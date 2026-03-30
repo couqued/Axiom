@@ -9,7 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,21 +45,18 @@ public class BollingerReserveService {
         }
         final Map<String, String> nameMap = tickerNames != null ? tickerNames : Map.of();
 
-        for (String mode : List.of("paper", "real")) {
-            Map<String, Integer> stages = stateStore.loadAllBuyStages(mode);
-            Map<String, String> tags = stateStore.loadAllEntryTags(mode);
-            int halfInvest = adminConfigStore.getSettings(mode).investAmountKrw() / 2;
-            stages.entrySet().stream()
-                    .filter(e -> e.getValue() == 1)
-                    .filter(e -> "rsi-bollinger".equals(tags.get(e.getKey())))
-                    .forEach(e -> {
-                        String ticker = e.getKey();
-                        String stockName = nameMap.getOrDefault(ticker, ticker);
-                        reservations.putIfAbsent(ticker, new ReservationEntry(stockName, halfInvest));
-                        log.info("[BollingerReserve] 복구 — {}/{}({}원), mode: {}",
-                                stockName, ticker, halfInvest, mode);
-                    });
-        }
+        Map<String, Integer> stages = stateStore.loadAllBuyStages();
+        Map<String, String> tags = stateStore.loadAllEntryTags();
+        int halfInvest = adminConfigStore.getSettings().investAmountKrw() / 2;
+        stages.entrySet().stream()
+                .filter(e -> e.getValue() == 1)
+                .filter(e -> "rsi-bollinger".equals(tags.get(e.getKey())))
+                .forEach(e -> {
+                    String ticker = e.getKey();
+                    String stockName = nameMap.getOrDefault(ticker, ticker);
+                    reservations.putIfAbsent(ticker, new ReservationEntry(stockName, halfInvest));
+                    log.info("[BollingerReserve] 복구 — {}/{}({}원)", stockName, ticker, halfInvest);
+                });
         if (!reservations.isEmpty()) {
             log.info("[BollingerReserve] 총 {}개 종목 2차 매수 대기 복구 완료", reservations.size());
         }

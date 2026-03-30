@@ -1068,6 +1068,119 @@ kis:
 
 ---
 <details>
+<summary><strong>[v0.6.1] - 2026-03-31</strong> &nbsp;·&nbsp; Slack 알림 개선 + 강제 청산 시간 조정</summary>
+
+<br>
+
+#### Added
+- **`sendRsiOverboughtHold()`** (`SlackNotifier`) — RSI > 70이지만 %B < 0.5(중심선 미달)로 HOLD 유지 시 알림 (종목당 1일 1회, `rsiOverboughtHoldNotifiedDate` Map으로 중복 방지)
+
+#### Changed
+- **`sendTradeResult()`** 매도 알림에 `avgBuyPrice` + ROI(%) 추가 표시
+- **시간별 요약 형식**: `[13:xx]` → `[13:00]` (정각 표시로 통일)
+- **일일 요약**: 스킵 종목 목록 제거 (가독성 개선)
+- **`ForceExitScheduler.forceExit()`** 강제 청산 시간: **15:20 → 15:19** (cron: `0 19 15 * * MON-FRI`)
+
+#### Notes
+- 강제 청산 시간 변경으로 `application.yml`의 cron 표현식 및 스케줄러 내부 시간 가드 모두 15:19로 업데이트 필요
+- 빌드: `docker build -t axiom/strategy-service:latest -f Dockerfile.strategy-service .` + `kubectl rollout restart deployment/strategy-service -n axiom`
+
+</details>
+
+---
+<details>
+<summary><strong>[v0.6.0] - 2026-03-25</strong> &nbsp;·&nbsp; RSI-Bollinger 전략 고도화 (OR 조건 + 점수화 + 분할매수 + %B 매도 필터)</summary>
+
+<br>
+
+#### Changed
+- **`RsiBollingerStrategy` BUY 조건** 변경: AND → OR + 점수화(Scoring)
+  - 기존: RSI < 30 **AND** 종가 < 하단밴드
+  - 변경: RSI < 30 **OR** 종가 < 하단밴드, 충족 지표 수에 따라 `buyStage` 결정
+    - BB 하단 이탈 깊이 점수: 최대 50점 (5% 이탈 시 50점)
+    - RSI 과매도 깊이 점수: 최대 50점 (RSI=0이면 50점)
+    - `buyStage 1` (BB만 이탈): 투자금 50% 매수
+    - `buyStage 2` (BB+RSI 동시 또는 RSI 단독): 투자금 나머지 50% 매수 (`BollingerReserveService` 예약 관리)
+- **`RsiBollingerStrategy` SELL 조건** 변경: %B 필터 추가
+  - 기존: RSI > 70 OR 종가 ≥ 중심선(MA20)
+  - 변경:
+    - 종가 ≥ 상단밴드(Upper) → 즉시 익절
+    - RSI > 70 AND %B ≥ 0.5 → 과매수 청산
+    - RSI > 70 AND %B < 0.5 → **HOLD** (중심선 미달, 추가 상승 기대)
+    - `%B = (현재가 - 하단) / (상단 - 하단)` (0=하단, 0.5=중심, 1=상단)
+- **`StrategyEngine`** — `TradeRecord`에 `strategyName` 필드 추가; SELL 시 `avgBuyPrice` 캡처 → `SlackNotifier`에 전달
+
+#### Notes
+- `BollingerReserveService`: 1단계 매수 후 2단계 진입 조건 충족 시 나머지 금액 자동 추가 매수 예약
+- 빌드: `docker build -t axiom/strategy-service:latest -f Dockerfile.strategy-service .` + `kubectl rollout restart deployment/strategy-service -n axiom`
+
+</details>
+
+---
+<details>
+<summary><strong>[v0.5.4] - 2026-03-20</strong> &nbsp;·&nbsp; CandleService 캔들 공백 보완 + AdminConfigStore 포맷 개선</summary>
+
+<br>
+
+#### Fixed
+- **`CandleService` 캔들 공백 보완** — DB에 캔들이 있어도 `days`보다 적으면 전체 구간(from)부터 KIS API 재조회
+  - 기존: 마지막 DB 날짜 이후(forward)만 보완 → 앞쪽 구간 공백 미해소
+  - 수정: `dbCandles.size() < days` 조건 추가 → 삼성전자/SK하이닉스 등 캔들 부족 문제 해결
+
+#### Changed
+- **`AdminConfigStore` JSON 포맷 변경**: `settings` 노드로 중첩되는 새 포맷으로 전환
+  ```json
+  {
+    "strategyMode": "market-based",
+    "settings": {
+      "paused": false,
+      "investAmountKrw": 300000,
+      "maxPositions": 5,
+      "trailingStopPct": 7.0,
+      "timeCutDays": 3,
+      "indexDropBlockPct": 2.0,
+      "volatilityBreakoutDailyLimit": 4,
+      "goldenCrossDailyLimit": 4,
+      "bollingerDailyLimit": 4
+    }
+  }
+  ```
+  - 구 플랫 포맷 자동 마이그레이션 지원 (`loadFromFile()` 개선)
+  - `strategyMode` 필드 추가: `"market-based"` (시장 상태별 전략 선택) | `"all-strategies"` (전략 전체 실행)
+  - 전략별 일일 매수 한도 추가: `volatilityBreakoutDailyLimit`, `goldenCrossDailyLimit`, `bollingerDailyLimit`
+
+#### Notes
+- `admin-config.json`이 구 플랫 포맷으로 저장되어 있어도 서비스 재시작 시 자동으로 새 포맷으로 마이그레이션됩니다.
+- 빌드: `docker build -t axiom/market-service:latest -f Dockerfile.market-service .` + `kubectl rollout restart deployment/market-service -n axiom` (CandleService)
+- 빌드: `docker build -t axiom/strategy-service:latest -f Dockerfile.strategy-service .` + `kubectl rollout restart deployment/strategy-service -n axiom` (AdminConfigStore)
+
+</details>
+
+---
+<details>
+<summary><strong>[v0.5.3] - 2026-03-15</strong> &nbsp;·&nbsp; Mock trading mode 완전 제거 — 실거래 전용 단일 모드</summary>
+
+<br>
+
+#### Removed
+- **`TradingModeStore.java`** 삭제 (market-service, order-service, portfolio-service, strategy-service 4개 서비스)
+- **`InternalModeController.java`** 삭제 (market-service)
+- **`ModeClient.java`** 삭제 (strategy-service)
+- **테스트 픽스처** 삭제: `MarketMockFixture.java`, `OrderMockFixture.java`, `PortfolioMockFixture.java`
+- **KIS API 테스트** 삭제: `KisMarketApiServiceTest.java`, `KisOrderApiServiceTest.java`, `KisAccountApiServiceTest.java`
+
+#### Changed
+- 각 서비스가 항상 real 모드로만 동작 — `KisApiConfig.getReal()` 고정 사용
+- Mock/paper 분기 코드 제거로 코드베이스 단순화
+
+#### Notes
+- 실거래(real) 전용으로 전환 완료. mock 모드 및 paper 모드 관련 설정은 더 이상 사용하지 않습니다.
+- 빌드: 전체 서비스 `docker build` + `kubectl rollout restart` 필요
+
+</details>
+
+---
+<details>
 <summary><strong>[v0.5.2] - 2026-03-10</strong> &nbsp;·&nbsp; 공휴일 거래일 체크 (YAML 공휴일 목록 + 스케줄러 holiday guard)</summary>
 
 <br>

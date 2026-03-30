@@ -25,12 +25,6 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
 kis:
-  mode: paper   # mock | paper | real
-  paper:
-    base-url: https://openapivts.koreainvestment.com:29443
-    app-key: ${KIS_PAPER_APP_KEY:PLACEHOLDER}
-    app-secret: ${KIS_PAPER_APP_SECRET:PLACEHOLDER}
-    account-no: ${KIS_PAPER_ACCOUNT_NO:PLACEHOLDER}
   real:
     base-url: https://openapi.koreainvestment.com:9443
     app-key: ${KIS_REAL_APP_KEY:PLACEHOLDER}
@@ -39,6 +33,12 @@ kis:
 
 market-service:
   url: ${MARKET_SERVICE_URL:http://localhost:8081}
+
+portfolio-service:
+  url: ${PORTFOLIO_SERVICE_URL:http://localhost:8083}
+
+strategy-service:
+  url: ${STRATEGY_SERVICE_URL:http://localhost:8084}
 
 slack:
   webhook-url: ${SLACK_WEBHOOK_URL:PLACEHOLDER}

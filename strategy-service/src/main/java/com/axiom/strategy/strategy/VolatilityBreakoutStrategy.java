@@ -1,6 +1,5 @@
 package com.axiom.strategy.strategy;
 
-import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.persistence.StrategyStateStore;
@@ -14,7 +13,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,24 +34,21 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
     private static final double VOL_CAP      = 2.0;
 
     private final StrategyStateStore stateStore;
-    private final AdminConfigStore adminConfigStore;
 
-    /** 당일 매수 종목 추적: "{mode}:{ticker}" → 매수일. ForceExitScheduler에서도 참조. */
+    /** 당일 매수 종목 추적: ticker → 매수일. ForceExitScheduler에서도 참조. */
     private final Map<String, LocalDate> todayBought = new ConcurrentHashMap<>();
 
-    /** 15:20 강제 청산이 실행된 날짜: mode → 날짜 */
-    private final Map<String, LocalDate> forceExitDates = new ConcurrentHashMap<>();
+    /** 15:20 강제 청산이 실행된 날짜 */
+    private volatile LocalDate forceExitDate = null;
 
     @PostConstruct
     public void initFromDb() {
-        for (String mode : List.of("paper", "real")) {
-            try {
-                Map<String, LocalDate> fromDb = stateStore.loadAllTodayBought(mode);
-                fromDb.forEach((ticker, date) -> todayBought.put(mode + ":" + ticker, date));
-                log.info("[VolBreakout] DB에서 todayBought 복구 — mode={}, {}개", mode, fromDb.size());
-            } catch (Exception e) {
-                log.warn("[VolBreakout] DB todayBought 복구 실패 (mode={}): {}", mode, e.getMessage());
-            }
+        try {
+            Map<String, LocalDate> fromDb = stateStore.loadAllTodayBought();
+            todayBought.putAll(fromDb);
+            log.info("[VolBreakout] DB에서 todayBought 복구 — {}개", fromDb.size());
+        } catch (Exception e) {
+            log.warn("[VolBreakout] DB todayBought 복구 실패: {}", e.getMessage());
         }
     }
 
@@ -83,18 +78,15 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
             return hold(ticker, currentPrice, "전일 변동폭 없음 — 전략 적용 불가");
         }
 
-        String mode = adminConfigStore.getTradingMode();
         LocalDate todayDate = today.getTradeDate();
 
         // 당일 15:20 강제 청산 실행 후 추가 매수 차단
-        LocalDate fExitDate = forceExitDates.get(mode);
-        if (fExitDate != null && fExitDate.equals(todayDate)) {
+        if (forceExitDate != null && forceExitDate.equals(todayDate)) {
             return hold(ticker, currentPrice, "당일 15:20 강제청산 완료 — 추가 매수 차단");
         }
 
         // 당일 이미 매수한 종목 스킵
-        String mapKey = mode + ":" + ticker;
-        if (todayBought.containsKey(mapKey) && todayBought.get(mapKey).equals(todayDate)) {
+        if (todayBought.containsKey(ticker) && todayBought.get(ticker).equals(todayDate)) {
             return hold(ticker, currentPrice, "오늘 이미 매수됨");
         }
 
@@ -125,42 +117,34 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
     }
 
     /**
-     * 오늘 변동성 돌파로 매수한 종목 목록 반환 (해당 모드만).
+     * 오늘 변동성 돌파로 매수한 종목 목록 반환.
      * ForceExitScheduler에서 15:20 강제 청산 시 사용.
      */
-    public Map<String, LocalDate> getTodayBought(String mode) {
-        String prefix = mode + ":";
-        Map<String, LocalDate> result = new HashMap<>();
-        todayBought.forEach((key, date) -> {
-            if (key.startsWith(prefix)) {
-                result.put(key.substring(prefix.length()), date);
-            }
-        });
-        return result;
+    public Map<String, LocalDate> getTodayBought() {
+        return java.util.Collections.unmodifiableMap(todayBought);
     }
 
     /**
      * 주문 체결 확정 후 호출. StrategyEngine에서 호출.
      */
-    public void markBought(String ticker, String mode) {
+    public void markBought(String ticker) {
         LocalDate today = LocalDate.now(TradingCalendar.KST);
-        todayBought.put(mode + ":" + ticker, today);
-        stateStore.saveTodayBought(ticker, today, mode);
+        todayBought.put(ticker, today);
+        stateStore.saveTodayBought(ticker, today);
     }
 
-    public void removeTodayBought(String ticker, String mode) {
-        todayBought.remove(mode + ":" + ticker);
-        stateStore.removeTodayBought(ticker, mode);
+    public void removeTodayBought(String ticker) {
+        todayBought.remove(ticker);
+        stateStore.removeTodayBought(ticker);
     }
 
     /**
      * 15:20 강제 청산 실행 완료 후 호출.
      * 이후 당일 신규 BUY 신호를 차단한다.
      */
-    public void markForceExited(String mode) {
-        LocalDate today = LocalDate.now(TradingCalendar.KST);
-        forceExitDates.put(mode, today);
-        log.info("[VolBreakout] 당일 강제청산 완료 — 추가 매수 차단 설정 ({}, mode={})", today, mode);
+    public void markForceExited() {
+        forceExitDate = LocalDate.now(TradingCalendar.KST);
+        log.info("[VolBreakout] 당일 강제청산 완료 — 추가 매수 차단 설정 ({})", forceExitDate);
     }
 
     private double avgVolume(List<CandleDto> candles) {

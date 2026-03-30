@@ -20,10 +20,8 @@ public class AdminConfigStore {
     private final StrategyConfig strategyConfig;
     private final ObjectMapper objectMapper;
 
-    private volatile String tradingMode = "paper";
     private volatile String strategyMode = "market-based"; // "market-based" | "all-strategies"
-    private volatile ModeSettings paperSettings;
-    private volatile ModeSettings realSettings;
+    private volatile ModeSettings settings;
 
     @Value("${admin.config-path:admin-config.json}")
     private String configFilePath;
@@ -36,8 +34,7 @@ public class AdminConfigStore {
         int    defaultTc        = strategyConfig.getTimeCut().getMaxHoldingDays();
         double defaultIdx       = 1.0;
 
-        paperSettings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos);
-        realSettings  = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos);
+        settings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos);
         loadFromFile();
     }
 
@@ -49,37 +46,21 @@ public class AdminConfigStore {
 
     // ── Accessors ────────────────────────────────────────────────────────────
 
-    public String getTradingMode()        { return tradingMode; }
-    public String getStrategyMode()       { return strategyMode; }
-    public ModeSettings getPaperSettings() { return paperSettings; }
-    public ModeSettings getRealSettings()  { return realSettings; }
+    public String getStrategyMode()        { return strategyMode; }
+    public ModeSettings getSettings()      { return settings; }
 
-    public ModeSettings getActiveSettings() {
-        return "real".equals(tradingMode) ? realSettings : paperSettings;
-    }
-
-    public ModeSettings getSettings(String mode) {
-        return "real".equals(mode) ? realSettings : paperSettings;
-    }
-
-    // Backward-compat delegation to active mode
-    public boolean isPaused()                  { return getActiveSettings().paused(); }
-    public int getInvestAmountKrw()            { return getActiveSettings().investAmountKrw(); }
-    public int getMaxPositions()               { return getActiveSettings().maxPositions(); }
-    public double getTrailingStopPct()         { return getActiveSettings().trailingStopPct(); }
-    public int getTimeCutDays()                { return getActiveSettings().timeCutDays(); }
-    public double getIndexDropBlockPct()       { return getActiveSettings().indexDropBlockPct(); }
-    public int getVolatilityBreakoutDailyLimit()    { return getActiveSettings().volatilityBreakoutDailyLimit(); }
-    public int getGoldenCrossDailyLimit()           { return getActiveSettings().goldenCrossDailyLimit(); }
-    public int getBollingerDailyLimit()             { return getActiveSettings().bollingerDailyLimit(); }
+    // Delegation to settings
+    public boolean isPaused()                  { return settings.paused(); }
+    public int getInvestAmountKrw()            { return settings.investAmountKrw(); }
+    public int getMaxPositions()               { return settings.maxPositions(); }
+    public double getTrailingStopPct()         { return settings.trailingStopPct(); }
+    public int getTimeCutDays()                { return settings.timeCutDays(); }
+    public double getIndexDropBlockPct()       { return settings.indexDropBlockPct(); }
+    public int getVolatilityBreakoutDailyLimit()    { return settings.volatilityBreakoutDailyLimit(); }
+    public int getGoldenCrossDailyLimit()           { return settings.goldenCrossDailyLimit(); }
+    public int getBollingerDailyLimit()             { return settings.bollingerDailyLimit(); }
 
     // ── Setters ──────────────────────────────────────────────────────────────
-
-    public void setTradingMode(String mode) {
-        this.tradingMode = "real".equals(mode) ? "real" : "paper";
-        saveToFile();
-        log.info("[AdminConfig] tradingMode 전환 → {}", this.tradingMode);
-    }
 
     public void setStrategyMode(String mode) {
         this.strategyMode = "all-strategies".equals(mode) ? "all-strategies" : "market-based";
@@ -87,62 +68,39 @@ public class AdminConfigStore {
         log.info("[AdminConfig] strategyMode 변경 → {}", this.strategyMode);
     }
 
-    /** targetMode == null 이면 현재 활성 모드의 paused 변경 */
-    public void setPaused(boolean paused, String targetMode) {
-        String mode = targetMode != null ? targetMode : tradingMode;
-        ModeSettings s = getSettings(mode);
-        updateSettings(mode, paused,
+    public void setPaused(boolean paused) {
+        ModeSettings s = settings;
+        updateSettings(paused,
                 s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
                 s.indexDropBlockPct(),
                 s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit());
     }
 
-    /** Backward-compat: active 모드 paused 변경 */
-    public void setPaused(boolean paused) {
-        setPaused(paused, null);
-    }
-
-    /** targetMode == null 이면 현재 활성 모드의 설정 변경 */
-    public void setConfig(String targetMode,
-                          int investAmountKrw, int maxPositions,
+    public void setConfig(int investAmountKrw, int maxPositions,
                           double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                           int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit) {
-        String mode = targetMode != null ? targetMode : tradingMode;
-        updateSettings(mode, getSettings(mode).paused(),
+        updateSettings(settings.paused(),
                 investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct,
                 volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit);
     }
 
-    /** Backward-compat: active 모드 설정 변경 */
-    public void setConfig(int investAmountKrw, int maxPositions,
-                          double trailingStopPct, int timeCutDays, double indexDropBlockPct) {
-        ModeSettings s = getActiveSettings();
-        setConfig(null, investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct,
-                s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit());
-    }
-
     // ── Private ──────────────────────────────────────────────────────────────
 
-    private void updateSettings(String mode, boolean paused,
+    private void updateSettings(boolean paused,
                                 int investAmountKrw, int maxPositions,
                                 double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                                 int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit) {
-        ModeSettings updated = new ModeSettings(paused, investAmountKrw, maxPositions,
+        settings = new ModeSettings(paused, investAmountKrw, maxPositions,
                 trailingStopPct, timeCutDays, indexDropBlockPct,
                 volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit);
-        if ("real".equals(mode)) {
-            realSettings = updated;
-        } else {
-            paperSettings = updated;
-        }
         saveToFile();
     }
 
     private void saveToFile() {
         try {
-            Snapshot snapshot = new Snapshot(tradingMode, strategyMode, paperSettings, realSettings);
+            Snapshot snapshot = new Snapshot(strategyMode, settings);
             objectMapper.writeValue(new File(configFilePath), snapshot);
-            log.info("[AdminConfig] 저장 — tradingMode={}", tradingMode);
+            log.info("[AdminConfig] 저장 완료");
         } catch (IOException e) {
             log.error("[AdminConfig] 저장 실패: {}", e.getMessage());
         }
@@ -153,20 +111,17 @@ public class AdminConfigStore {
         if (!file.exists()) return;
         try {
             JsonNode node = objectMapper.readTree(file);
-            if (node.has("tradingMode"))  this.tradingMode  = node.get("tradingMode").asText(this.tradingMode);
             if (node.has("strategyMode")) this.strategyMode = node.get("strategyMode").asText(this.strategyMode);
 
-            if (node.has("paper")) {
-                paperSettings = loadModeSettings(node.get("paper"), paperSettings);
+            if (node.has("settings")) {
+                settings = loadModeSettings(node.get("settings"), settings);
             } else {
-                // 레거시 flat 포맷 마이그레이션 (paper 설정으로 로드)
-                paperSettings = loadModeSettings(node, paperSettings);
+                // 플랫 포맷: settings 노드 없이 최상위에 직접 필드가 있는 경우
+                settings = loadModeSettings(node, settings);
+                saveToFile(); // 새 포맷으로 재저장
+                log.info("[AdminConfig] 플랫 포맷 마이그레이션 완료 → 새 포맷으로 재저장");
             }
-            if (node.has("real")) {
-                realSettings = loadModeSettings(node.get("real"), realSettings);
-            }
-            log.info("[AdminConfig] 로드 완료 — tradingMode={}, paper.paused={}, real.paused={}",
-                    tradingMode, paperSettings.paused(), realSettings.paused());
+            log.info("[AdminConfig] 로드 완료 — strategyMode={}, paused={}", strategyMode, settings.paused());
         } catch (IOException e) {
             log.warn("[AdminConfig] 로드 실패 (기본값 사용): {}", e.getMessage());
         }
@@ -191,5 +146,5 @@ public class AdminConfigStore {
         return new ModeSettings(paused, invest, maxPos, ts, tc, idx, volDaily, gcDaily, bollDaily);
     }
 
-    public record Snapshot(String tradingMode, String strategyMode, ModeSettings paper, ModeSettings real) {}
+    public record Snapshot(String strategyMode, ModeSettings settings) {}
 }

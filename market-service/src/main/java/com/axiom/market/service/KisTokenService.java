@@ -7,6 +7,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
@@ -21,9 +24,6 @@ public class KisTokenService {
     private String cachedToken;
     private Instant tokenExpiry;
 
-    private String cachedRealToken;
-    private Instant realTokenExpiry;
-
     public String getAccessToken() {
         if (needsRefresh()) {
             refreshToken();
@@ -35,79 +35,37 @@ public class KisTokenService {
         return cachedToken == null || Instant.now().isAfter(tokenExpiry.minus(30, ChronoUnit.MINUTES));
     }
 
-    /**
-     * Real 서버 전용 Access Token 반환.
-     * paper 모드에서 지수 조회 등 real 서버가 필요한 경우에 사용한다.
-     * real 키가 미설정(PLACEHOLDER)이면 null 반환.
-     */
-    public String getRealAccessToken() {
-        KisApiConfig.ModeConfig realConfig = kisApiConfig.getReal();
-        if ("PLACEHOLDER".equals(realConfig.getAppKey())) {
-            log.warn("[KIS] real 서버 키 미설정 — getRealAccessToken() null 반환");
-            return null;
-        }
-        if (needsRealRefresh()) {
-            refreshRealToken();
-        }
-        return cachedRealToken;
+    /** 토큰 캐시를 강제로 무효화하고 즉시 재발급한다. */
+    public synchronized void forceRefresh() {
+        cachedToken = null;
+        tokenExpiry = null;
+        refreshToken();
     }
 
-    private boolean needsRealRefresh() {
-        return cachedRealToken == null
-                || Instant.now().isAfter(realTokenExpiry.minus(30, ChronoUnit.MINUTES));
-    }
-
-    private synchronized void refreshRealToken() {
-        if (!needsRealRefresh()) return;
-
-        KisApiConfig.ModeConfig realConfig = kisApiConfig.getReal();
-        log.info("[KIS] Real Access Token 발급 요청");
-
-        Map<String, String> body = Map.of(
-                "grant_type", "client_credentials",
-                "appkey",     realConfig.getAppKey(),
-                "appsecret",  realConfig.getAppSecret()
-        );
-
-        WebClient realClient = WebClient.builder()
-                .baseUrl(realConfig.getBaseUrl())
-                .build();
-
-        int maxRetry = 3;
-        for (int i = 0; i < maxRetry; i++) {
+    private Instant parseExpiry(String expiryStr) {
+        if (expiryStr != null && !expiryStr.isBlank()) {
             try {
-                Map<?, ?> response = realClient.post()
-                        .uri("/oauth2/tokenP")
-                        .bodyValue(body)
-                        .retrieve()
-                        .bodyToMono(Map.class)
-                        .block();
-
-                cachedRealToken = (String) response.get("access_token");
-                realTokenExpiry = Instant.now().plus(86400, ChronoUnit.SECONDS);
-                log.info("[KIS] Real Access Token 발급 완료 (만료: 24시간 후)");
-                return;
+                DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+                return LocalDateTime.parse(expiryStr, fmt)
+                        .atZone(ZoneId.of("Asia/Seoul"))
+                        .toInstant();
             } catch (Exception e) {
-                if (i < maxRetry - 1) {
-                    log.warn("[KIS] Real Access Token 발급 실패 ({}회), 3초 후 재시도: {}", i + 1, e.getMessage());
-                    try { Thread.sleep(3000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-                } else {
-                    log.error("[KIS] Real Access Token 발급 최종 실패: {}", e.getMessage());
-                }
+                log.warn("[KIS] access_token_token_expired 파싱 실패 — 24h 폴백: {}", expiryStr);
             }
         }
+        return Instant.now().plus(86400, ChronoUnit.SECONDS);
     }
 
     private synchronized void refreshToken() {
         if (!needsRefresh()) return;
 
-        KisApiConfig.ModeConfig active = kisApiConfig.getActive();
-        log.info("[KIS] Access Token 발급 요청 (mode: {})", kisApiConfig.getMode());
+        KisApiConfig.ModeConfig config = kisApiConfig.getReal();
+        log.info("[KIS] Access Token 발급 요청");
 
         Map<String, String> body = Map.of(
                 "grant_type", "client_credentials",
-                "appkey",     active.getAppKey(),
-                "appsecret",  active.getAppSecret()
+                "appkey",     config.getAppKey(),
+                "appsecret",  config.getAppSecret()
         );
 
         int maxRetry = 3;
@@ -121,8 +79,8 @@ public class KisTokenService {
                         .block();
 
                 cachedToken = (String) response.get("access_token");
-                tokenExpiry = Instant.now().plus(86400, ChronoUnit.SECONDS);
-                log.info("[KIS] Access Token 발급 완료 (만료: 24시간 후)");
+                tokenExpiry = parseExpiry((String) response.get("access_token_token_expired"));
+                log.info("[KIS] Access Token 발급 완료 (만료: {})", tokenExpiry);
                 return;
             } catch (Exception e) {
                 if (i < maxRetry - 1) {

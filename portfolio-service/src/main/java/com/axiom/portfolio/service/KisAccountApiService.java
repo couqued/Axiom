@@ -1,7 +1,6 @@
 package com.axiom.portfolio.service;
 
 import com.axiom.portfolio.config.KisApiConfig;
-import com.axiom.portfolio.store.TradingModeStore;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,69 +21,41 @@ public class KisAccountApiService {
 
     private final KisApiConfig kisApiConfig;
     private final KisTokenService kisTokenService;
-    private final TradingModeStore tradingModeStore;
 
-    private WebClient paperClient;
     private WebClient realClient;
 
     @PostConstruct
     void initClients() {
-        if (!kisApiConfig.isMock()) {
-            paperClient = WebClient.builder().baseUrl(kisApiConfig.getPaper().getBaseUrl()).build();
-            realClient  = WebClient.builder().baseUrl(kisApiConfig.getReal().getBaseUrl()).build();
-        }
+        realClient = WebClient.builder().baseUrl(kisApiConfig.getReal().getBaseUrl()).build();
     }
 
     public Map<String, Object> getBalance() {
-        if (tradingModeStore.isMock()) {
-            return getMockBalance();
-        }
         try {
             return getKisBalance();
         } catch (Exception e) {
-            log.error("[KIS-{}] 잔고 조회 실패 — fallback 반환: {}",
-                    tradingModeStore.getMode().toUpperCase(), e.getMessage());
+            log.error("[KIS] 잔고 조회 실패 — fallback 반환: {}", e.getMessage());
             Map<String, Object> fallback = new HashMap<>();
             fallback.put("totalBalance",   BigDecimal.ZERO);
             fallback.put("cashBalance",    BigDecimal.ZERO);
             fallback.put("stockBalance",   BigDecimal.ZERO);
             fallback.put("profitLoss",     BigDecimal.ZERO);
             fallback.put("profitLossRate", BigDecimal.ZERO);
-            fallback.put("mock", false);
             fallback.put("error", e.getMessage());
             return fallback;
         }
     }
 
-    // ── Mock ─────────────────────────────────────────────────────────────────
-
-    private Map<String, Object> getMockBalance() {
-        Map<String, Object> balance = new HashMap<>();
-        balance.put("totalBalance",    new BigDecimal("10000000"));
-        balance.put("cashBalance",     new BigDecimal("5000000"));
-        balance.put("stockBalance",    new BigDecimal("5000000"));
-        balance.put("profitLoss",      new BigDecimal("250000"));
-        balance.put("profitLossRate",  new BigDecimal("5.26"));
-        balance.put("mock", true);
-        log.info("[MOCK] 계좌 잔고 조회");
-        return balance;
-    }
-
-    // ── Paper / Real ──────────────────────────────────────────────────────────
+    // ── Real ──────────────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getKisBalance() {
-        boolean isPaper = tradingModeStore.isPaper();
-        KisApiConfig.ModeConfig modeConfig = isPaper ? kisApiConfig.getPaper() : kisApiConfig.getReal();
-        WebClient wc = isPaper ? paperClient : realClient;
+        KisApiConfig.ModeConfig config = kisApiConfig.getReal();
         String token = kisTokenService.getAccessToken();
-        String trId  = isPaper ? "VTTC8434R" : "TTTC8434R";
-        String[] accountParts = modeConfig.getAccountNo().split("-");
-        String modeLabel = tradingModeStore.getMode().toUpperCase();
+        String[] accountParts = config.getAccountNo().split("-");
 
-        log.info("[KIS-{}] 잔고 조회 요청", modeLabel);
+        log.info("[KIS] 잔고 조회 요청");
 
-        Map<String, Object> response = wc.get()
+        Map<String, Object> response = realClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/uapi/domestic-stock/v1/trading/inquire-balance")
                         .queryParam("CANO",                  accountParts[0])
@@ -100,14 +71,14 @@ public class KisAccountApiService {
                         .queryParam("CTX_AREA_NK100",        "")
                         .build())
                 .header("authorization", "Bearer " + token)
-                .header("appkey",    modeConfig.getAppKey())
-                .header("appsecret", modeConfig.getAppSecret())
-                .header("tr_id",     trId)
+                .header("appkey",    config.getAppKey())
+                .header("appsecret", config.getAppSecret())
+                .header("tr_id",     "TTTC8434R")
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, clientResponse ->
                         clientResponse.bodyToMono(String.class)
                                 .flatMap(body -> {
-                                    log.error("[KIS-{}] HTTP {} 오류 응답: {}", modeLabel,
+                                    log.error("[KIS] HTTP {} 오류 응답: {}",
                                             clientResponse.statusCode().value(), body);
                                     return Mono.error(new RuntimeException(
                                             "KIS API HTTP " + clientResponse.statusCode().value() + ": " + body));
@@ -120,20 +91,19 @@ public class KisAccountApiService {
         String rtCd = (String) response.get("rt_cd");
         if (!"0".equals(rtCd)) {
             String msg = (String) response.getOrDefault("msg1", "알 수 없는 오류");
-            log.error("[KIS-{}] 잔고 조회 오류 - rt_cd: {}, msg: {}", modeLabel, rtCd, msg);
+            log.error("[KIS] 잔고 조회 오류 - rt_cd: {}, msg: {}", rtCd, msg);
             throw new RuntimeException("KIS 잔고 조회 실패: " + msg);
         }
 
         List<Map<String, String>> output2 = (List<Map<String, String>>) response.get("output2");
         if (output2 == null || output2.isEmpty()) {
-            log.warn("[KIS-{}] output2 없음 — 빈 잔고 반환", modeLabel);
+            log.warn("[KIS] output2 없음 — 빈 잔고 반환");
             Map<String, Object> empty = new HashMap<>();
             empty.put("totalBalance",   BigDecimal.ZERO);
             empty.put("cashBalance",    BigDecimal.ZERO);
             empty.put("stockBalance",   BigDecimal.ZERO);
             empty.put("profitLoss",     BigDecimal.ZERO);
             empty.put("profitLossRate", BigDecimal.ZERO);
-            empty.put("mock", false);
             return empty;
         }
         Map<String, String> summary = output2.get(0);
@@ -156,8 +126,7 @@ public class KisAccountApiService {
         result.put("stockBalance",   parseBigDecimal(summary.get("scts_evlu_amt")));
         result.put("profitLoss",     profitLoss);
         result.put("profitLossRate", profitLossRate);
-        result.put("mock", false);
-        log.info("[KIS-{}] 잔고 조회 완료 - 총평가: {}", modeLabel, result.get("totalBalance"));
+        log.info("[KIS] 잔고 조회 완료 - 총평가: {}", result.get("totalBalance"));
         return result;
     }
 

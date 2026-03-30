@@ -16,7 +16,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -38,10 +37,6 @@ public class CandleService {
      */
     @Transactional
     public List<CandleDto> getCandles(String ticker, int days) {
-        if (kisApiConfig.isMock()) {
-            return getMockCandles(ticker, days);
-        }
-
         LocalDate today = LocalDate.now();
         LocalDate from  = today.minusDays(days + 30L); // 주말/공휴일 여유분 포함
 
@@ -50,7 +45,8 @@ public class CandleService {
                 .findByTickerAndTradeDateBetweenOrderByTradeDateAsc(ticker, from, today);
 
         // 마지막 수집일 이후 데이터가 없으면 KIS에서 보완
-        LocalDate fetchFrom = dbCandles.isEmpty()
+        // DB 데이터가 부족하면 전체 구간 재조회로 앞쪽 공백도 보완
+        LocalDate fetchFrom = (dbCandles.isEmpty() || dbCandles.size() < days)
                 ? from
                 : dbCandles.get(dbCandles.size() - 1).getTradeDate().plusDays(1);
 
@@ -101,7 +97,7 @@ public class CandleService {
 
     @SuppressWarnings("unchecked")
     private List<DailyCandle> fetchFromKis(String ticker, LocalDate from, LocalDate to) {
-        KisApiConfig.ModeConfig active = kisApiConfig.getActive();
+        KisApiConfig.ModeConfig active = kisApiConfig.getReal();
         String token = kisTokenService.getAccessToken();
 
         log.info("[KIS] 일봉 조회 - ticker: {}, {} ~ {}", ticker, from, to);
@@ -153,40 +149,6 @@ public class CandleService {
             log.error("[KIS] 일봉 조회 실패 - ticker: {}, error: {}", ticker, e.getMessage());
             return List.of();
         }
-    }
-
-    // ── Mock ─────────────────────────────────────────────────────────────────
-
-    private List<CandleDto> getMockCandles(String ticker, int days) {
-        Map<String, Integer> basePrices = Map.of(
-                "005930", 75000, "000660", 185000, "035420", 220000,
-                "051910", 320000, "006400", 280000
-        );
-        int base = basePrices.getOrDefault(ticker, 50000);
-        Random rand = new Random(ticker.hashCode());
-        List<CandleDto> result = new ArrayList<>();
-        LocalDate date = LocalDate.now().minusDays(days);
-        int price = base;
-
-        for (int i = 0; i < days; i++) {
-            date = date.plusDays(1);
-            if (date.getDayOfWeek().getValue() >= 6) { i--; continue; } // 주말 제외
-            int change = (rand.nextInt(41) - 20) * (base / 1000);
-            price = Math.max(base / 2, price + change);
-            int high  = price + rand.nextInt(base / 100 + 1);
-            int low   = price - rand.nextInt(base / 100 + 1);
-            int open  = low + rand.nextInt(Math.max(1, high - low));
-            result.add(CandleDto.builder()
-                    .tradeDate(date)
-                    .openPrice(BigDecimal.valueOf(open))
-                    .highPrice(BigDecimal.valueOf(high))
-                    .lowPrice(BigDecimal.valueOf(low))
-                    .closePrice(BigDecimal.valueOf(price))
-                    .volume((long) (rand.nextInt(5000000) + 100000))
-                    .build());
-        }
-        log.info("[MOCK] 일봉 조회 - ticker: {}, {}일", ticker, result.size());
-        return result;
     }
 
     // ── 유틸 ─────────────────────────────────────────────────────────────────
