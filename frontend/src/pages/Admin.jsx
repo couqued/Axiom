@@ -19,7 +19,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
   const [marking, setMarking] = useState(false)
 
   const [fields, setFields] = useState({
-    invest: '', maxPos: '', trailing: '', timeCut: '', indexDrop: '',
+    invest: '', maxPos: '', trailing: '', profitTake: '', timeCut: '', indexDrop: '',
     volBreakoutDaily: '', goldenCrossDaily: '', bollingerDaily: '',
   })
 
@@ -27,6 +27,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
     invest:           String(s.settings.investAmountKrw),
     maxPos:           String(s.settings.maxPositions),
     trailing:         String(s.settings.trailingStopPct),
+    profitTake:       String(s.settings.profitTakePct),
     timeCut:          String(s.settings.timeCutDays),
     indexDrop:        String(s.settings.indexDropBlockPct),
     volBreakoutDaily: String(s.settings.volatilityBreakoutDailyLimit),
@@ -76,6 +77,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
     const invest          = parseInt(fields.invest, 10)
     const maxPos          = parseInt(fields.maxPos, 10)
     const trailing        = parseFloat(fields.trailing)
+    const profitTake      = parseFloat(fields.profitTake)
     const timeCut         = parseInt(fields.timeCut, 10)
     const indexDrop       = parseFloat(fields.indexDrop)
     const volBreakoutDaily = parseInt(fields.volBreakoutDaily, 10)
@@ -85,6 +87,10 @@ export default function Admin({ onClose, onConfigUpdated }) {
         || isNaN(trailing) || trailing <= 0 || isNaN(timeCut) || timeCut < 1
         || isNaN(indexDrop) || indexDrop < 0) {
       setSaveMsg({ ok: false, text: '올바른 숫자를 입력하세요' })
+      return
+    }
+    if (isNaN(profitTake) || profitTake < 0) {
+      setSaveMsg({ ok: false, text: '익절 비율은 0 이상의 숫자를 입력하세요 (0=비활성)' })
       return
     }
     if (isNaN(volBreakoutDaily) || volBreakoutDaily < 0 || isNaN(goldenCrossDaily) || goldenCrossDaily < 0 || isNaN(bollingerDaily) || bollingerDaily < 0) {
@@ -98,6 +104,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
         investAmountKrw: invest,
         maxPositions: maxPos,
         trailingStopPct: trailing,
+        profitTakePct: profitTake,
         timeCutDays: timeCut,
         indexDropBlockPct: indexDrop,
         volatilityBreakoutDailyLimit: volBreakoutDaily,
@@ -218,6 +225,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
                   { key: 'invest',           label: '1회 매수금액 (원)',              min: 1,   max: undefined, step: 1 },
                   { key: 'maxPos',           label: '최대 보유 종목 수',               min: 1,   max: 20,        step: 1 },
                   { key: 'trailing',         label: '트레일링 스탑 (%)',               min: 0.1, max: 30,        step: 0.1 },
+                  { key: 'profitTake',       label: '익절 비율 (%, 0=비활성)',         min: 0,   max: 30,        step: 0.1 },
                   { key: 'timeCut',          label: '타임 컷 (거래일)',                min: 1,   max: 30,        step: 1 },
                   { key: 'indexDrop',        label: '지수 하락 매수차단 (%)',          min: 0,   max: 10,        step: 0.1 },
                   { key: 'volBreakoutDaily', label: '변동성돌파 일일 한도 (0=비활성)', min: 0,   max: 20,        step: 1 },

@@ -7,6 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import com.axiom.strategy.util.TradingCalendar;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -26,6 +28,9 @@ public class StrategyScheduler {
     private final StrategyEngine strategyEngine;
     private final DailySummaryCollector dailySummaryCollector;
     private final SlackNotifier slackNotifier;
+
+    /** 동시 실행 방지 플래그 — 이전 run()이 끝나기 전에 새 트리거가 오면 스킵 */
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     /**
      * 평일 09:05 ~ 15:20 사이 5분마다 실행.
@@ -51,9 +56,18 @@ public class StrategyScheduler {
             return;
         }
 
+        if (!running.compareAndSet(false, true)) {
+            log.warn("[Scheduler] 이전 실행 진행 중 — 중복 실행 스킵 ({})", now.toLocalTime());
+            return;
+        }
+
         log.info("[Scheduler] 전략 실행 트리거 - {}", now.toLocalTime());
-        StrategyEngine.RunResult result = strategyEngine.run();
-        dailySummaryCollector.record(result);
+        try {
+            StrategyEngine.RunResult result = strategyEngine.run();
+            dailySummaryCollector.record(result);
+        } finally {
+            running.set(false);
+        }
     }
 
     /** 매 시각 정각 10:00~15:00 평일 — 직전 1시간(H-1:xx) 요약 Slack 발송 */
@@ -78,6 +92,7 @@ public class StrategyScheduler {
             case "캔들없음"     -> "캔들 데이터 없음";
             case "캔들부족"     -> "캔들 부족";
             case "시장경보"     -> "시장 경보";
+            case "보유한도"     -> "전략 보유한도 초과";
             case "최대보유"     -> "최대 보유 수 초과";
             case "그룹한도(볼린저)" -> "그룹 한도(볼린저)";
             case "그룹한도(추세)"   -> "그룹 한도(추세)";

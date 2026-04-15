@@ -149,6 +149,7 @@ export default function Strategy({ liveAdminConfig }) {
 
   if (loading) return <div className="loading">로딩 중...</div>
 
+  const activeSettings = adminConfig?.settings
   const isBullish = marketState === 'BULLISH'
   const isBearish = marketState === 'BEARISH'
   const activeStrategies = STRATEGIES_BY_STATE[marketState] ?? []
@@ -333,6 +334,7 @@ export default function Strategy({ liveAdminConfig }) {
           <div className="config-item"><span className="config-label">골든크로스 일일한도</span><span className="config-value">{activeSettings ? (activeSettings.goldenCrossDailyLimit === 0 ? '비활성' : activeSettings.goldenCrossDailyLimit + '회') : '—'}</span></div>
           <div className="config-item"><span className="config-label">볼린저밴드 일일한도</span><span className="config-value">{activeSettings ? (activeSettings.bollingerDailyLimit === 0 ? '비활성' : activeSettings.bollingerDailyLimit + '회') : '—'}</span></div>
           <div className="config-item"><span className="config-label">트레일링 스탑</span><span className="config-value">{activeSettings ? `고점 -${activeSettings.trailingStopPct}%` : '—'}</span></div>
+          <div className="config-item"><span className="config-label">익절 비율</span><span className="config-value">{activeSettings ? (activeSettings.profitTakePct > 0 ? `+${activeSettings.profitTakePct}%` : '비활성') : '—'}</span></div>
           <div className="config-item"><span className="config-label">타임 컷</span><span className="config-value">{activeSettings ? activeSettings.timeCutDays + '거래일' : '—'}</span></div>
           <div className="config-item"><span className="config-label">지수 하락 매수차단</span><span className="config-value">
             {activeSettings?.indexDropBlockPct}% {' '}

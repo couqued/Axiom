@@ -27,7 +27,28 @@ public class KisTokenService {
     }
 
     private boolean needsRefresh() {
-        return cachedToken == null || Instant.now().isAfter(tokenExpiry.minus(30, ChronoUnit.MINUTES));
+        return cachedToken == null || tokenExpiry == null
+                || Instant.now().isAfter(tokenExpiry.minus(30, ChronoUnit.MINUTES));
+    }
+
+    /** KIS에서 토큰 만료 오류 수신 시 강제 무효화 후 재발급 */
+    public synchronized void forceRefresh() {
+        log.info("[KIS] 토큰 만료 감지 — market-service 강제 재발급 요청");
+        cachedToken = null;
+        tokenExpiry = null;
+
+        Map<?, ?> response = WebClient.builder()
+                .baseUrl(marketServiceUrl)
+                .build()
+                .post()
+                .uri("/internal/token/refresh")
+                .retrieve()
+                .bodyToMono(Map.class)
+                .block();
+
+        cachedToken = (String) response.get("token");
+        tokenExpiry = Instant.now().plus(86400, ChronoUnit.SECONDS);
+        log.info("[KIS] Access Token 강제 재발급 완료");
     }
 
     private synchronized void refreshToken() {

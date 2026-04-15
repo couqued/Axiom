@@ -7,7 +7,9 @@
       "Bash(docker build:*)",
       "Bash(kubectl get:*)",
       "Bash(kubectl rollout:*)",
-      "Bash(kubectl exec:*)"
+      "Bash(kubectl exec:*)",
+      "Bash(wmic process:*)",
+      "Bash(tasklist /fi \"imagename eq java.exe\")"
     ]
   }
 }

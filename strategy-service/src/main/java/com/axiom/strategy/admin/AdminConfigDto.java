@@ -9,5 +9,6 @@ public record AdminConfigDto(
         Double indexDropBlockPct,
         Integer volatilityBreakoutDailyLimit,
         Integer goldenCrossDailyLimit,
-        Integer bollingerDailyLimit
+        Integer bollingerDailyLimit,
+        Double profitTakePct
 ) {}

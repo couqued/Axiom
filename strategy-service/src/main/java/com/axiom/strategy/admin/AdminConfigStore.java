@@ -34,7 +34,7 @@ public class AdminConfigStore {
         int    defaultTc        = strategyConfig.getTimeCut().getMaxHoldingDays();
         double defaultIdx       = 1.0;
 
-        settings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos);
+        settings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos, 0.0);
         loadFromFile();
     }
 
@@ -42,7 +42,8 @@ public class AdminConfigStore {
                                double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                                int volatilityBreakoutDailyLimit,
                                int goldenCrossDailyLimit,
-                               int bollingerDailyLimit) {}
+                               int bollingerDailyLimit,
+                               double profitTakePct) {}
 
     // ── Accessors ────────────────────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ public class AdminConfigStore {
     public int getVolatilityBreakoutDailyLimit()    { return settings.volatilityBreakoutDailyLimit(); }
     public int getGoldenCrossDailyLimit()           { return settings.goldenCrossDailyLimit(); }
     public int getBollingerDailyLimit()             { return settings.bollingerDailyLimit(); }
+    public double getProfitTakePct()                { return settings.profitTakePct(); }
 
     // ── Setters ──────────────────────────────────────────────────────────────
 
@@ -73,15 +75,17 @@ public class AdminConfigStore {
         updateSettings(paused,
                 s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
                 s.indexDropBlockPct(),
-                s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit());
+                s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
+                s.profitTakePct());
     }
 
     public void setConfig(int investAmountKrw, int maxPositions,
                           double trailingStopPct, int timeCutDays, double indexDropBlockPct,
-                          int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit) {
+                          int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit,
+                          double profitTakePct) {
         updateSettings(settings.paused(),
                 investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct,
-                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit);
+                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct);
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
@@ -89,10 +93,11 @@ public class AdminConfigStore {
     private void updateSettings(boolean paused,
                                 int investAmountKrw, int maxPositions,
                                 double trailingStopPct, int timeCutDays, double indexDropBlockPct,
-                                int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit) {
+                                int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit,
+                                double profitTakePct) {
         settings = new ModeSettings(paused, investAmountKrw, maxPositions,
                 trailingStopPct, timeCutDays, indexDropBlockPct,
-                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit);
+                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct);
         saveToFile();
     }
 
@@ -143,7 +148,10 @@ public class AdminConfigStore {
         int bollDaily    = node.has("bollingerDailyLimit")
                 ? node.get("bollingerDailyLimit").asInt(def.bollingerDailyLimit())
                 : maxPos;
-        return new ModeSettings(paused, invest, maxPos, ts, tc, idx, volDaily, gcDaily, bollDaily);
+        double profitTake = node.has("profitTakePct")
+                ? node.get("profitTakePct").asDouble(def.profitTakePct())
+                : def.profitTakePct();
+        return new ModeSettings(paused, invest, maxPos, ts, tc, idx, volDaily, gcDaily, bollDaily, profitTake);
     }
 
     public record Snapshot(String strategyMode, ModeSettings settings) {}

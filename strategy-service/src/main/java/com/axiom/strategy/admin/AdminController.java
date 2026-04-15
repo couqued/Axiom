@@ -63,7 +63,8 @@ public class AdminController {
 
         boolean hasSettingFields = dto.investAmountKrw() != null || dto.maxPositions() != null
                 || dto.trailingStopPct() != null || dto.timeCutDays() != null || dto.indexDropBlockPct() != null
-                || dto.volatilityBreakoutDailyLimit() != null || dto.goldenCrossDailyLimit() != null || dto.bollingerDailyLimit() != null;
+                || dto.volatilityBreakoutDailyLimit() != null || dto.goldenCrossDailyLimit() != null
+                || dto.bollingerDailyLimit() != null || dto.profitTakePct() != null;
         if (hasSettingFields) {
             AdminConfigStore.ModeSettings current = adminConfigStore.getSettings();
 
@@ -75,7 +76,8 @@ public class AdminController {
             int    newVolDaily  = dto.volatilityBreakoutDailyLimit()   != null ? dto.volatilityBreakoutDailyLimit()   : current.volatilityBreakoutDailyLimit();
             int    newGcDaily   = dto.goldenCrossDailyLimit()          != null ? dto.goldenCrossDailyLimit()          : current.goldenCrossDailyLimit();
             int    newBollDaily = dto.bollingerDailyLimit()            != null ? dto.bollingerDailyLimit()            : current.bollingerDailyLimit();
-            adminConfigStore.setConfig(newInvest, newMaxPos, newTs, newTc, newIdx, newVolDaily, newGcDaily, newBollDaily);
+            double newPtPct     = dto.profitTakePct()                  != null ? dto.profitTakePct()                  : current.profitTakePct();
+            adminConfigStore.setConfig(newInvest, newMaxPos, newTs, newTc, newIdx, newVolDaily, newGcDaily, newBollDaily, newPtPct);
         }
 
         return ResponseEntity.ok(currentStatus());
@@ -171,7 +173,8 @@ public class AdminController {
                 new AdminStatusDto.ModeSettingsDto(
                         s.paused(), s.investAmountKrw(), s.maxPositions(),
                         s.trailingStopPct(), s.timeCutDays(), s.indexDropBlockPct(),
-                        s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit()),
+                        s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
+                        s.profitTakePct()),
                 marketStateService.isIndexDropBlockedToday(),
                 marketStateService.isIndexDropCheckedToday(),
                 bollingerReserveService.getAllReservations()

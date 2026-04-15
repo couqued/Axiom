@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 /**
@@ -32,6 +33,7 @@ public class MarketStateScheduler {
     /**
      * 서비스 재시작 시 감시 종목 복구.
      * volatility-breakout todayBought는 DB에서 직접 복구 (@PostConstruct in VolatilityBreakoutStrategy).
+     * 08:30 이후 재시작 시 missed된 morning routine도 보완 실행.
      */
     @PostConstruct
     public void initOnStartup() {
@@ -45,6 +47,20 @@ public class MarketStateScheduler {
             }
         } catch (Exception e) {
             log.warn("[MarketStateScheduler] 기동 시 감시 종목 로드 실패 — yml fallback 유지: {}", e.getMessage());
+        }
+
+        // 08:30 이후 거래일에 기동된 경우 — 크론 missed 보완
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
+        LocalTime now   = LocalTime.now(TradingCalendar.KST);
+        if (TradingCalendar.isTradingDay(today) && now.isAfter(LocalTime.of(8, 30))) {
+            log.info("[MarketStateScheduler] 08:30 이후 기동 감지 — 시장 상태 즉시 갱신");
+            try {
+                marketStateService.refresh();
+                int tickerCount = strategyEngine.getWatchTickerCount();
+                slackNotifier.sendSchedulerScreenerRefresh(tickerCount, marketStateService.getCurrentState().name());
+            } catch (Exception e) {
+                log.warn("[MarketStateScheduler] 기동 시 시장 상태 갱신 실패: {}", e.getMessage());
+            }
         }
     }
 

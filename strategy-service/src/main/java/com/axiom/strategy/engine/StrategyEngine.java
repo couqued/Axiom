@@ -8,7 +8,6 @@ import com.axiom.strategy.config.StrategyConfig;
 import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
-import com.axiom.strategy.dto.OrderSummaryDto;
 import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.dto.SignalGapDto;
@@ -68,9 +67,6 @@ public class StrategyEngine {
     private volatile LocalDateTime lastEvalAt;
     private final java.util.concurrent.CopyOnWriteArrayList<RunRecord> todayRuns = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile LocalDate lastRunDate = null;
-    /** 전략별 당일 매수 건수: "strategyName" → count */
-    private final Map<String, Integer> dailyBuyCountByKey = new ConcurrentHashMap<>();
-    private volatile LocalDate lastBuyCountResetDate = null;
     /** 수동 즉시 실행 상태 */
     private volatile boolean manualRunning = false;
     private volatile String lastManualRunMessage = null;
@@ -81,28 +77,6 @@ public class StrategyEngine {
     public void init() {
         watchTickers = strategyConfig.getWatchTickers();
         log.info("[Engine] 초기 감시 종목 로드 — yml fallback {}개", watchTickers.size());
-        restoreDailyBuyCounts();
-    }
-
-    private void restoreDailyBuyCounts() {
-        try {
-            List<OrderSummaryDto> orders = orderClient.getFilledOrders();
-            LocalDate today = LocalDate.now(TradingCalendar.KST);
-            orders.stream()
-                    .filter(o -> "BUY".equals(o.getOrderType())
-                              && "FILLED".equals(o.getStatus())
-                              && o.getStrategyName() != null
-                              && o.getCreatedAt() != null
-                              && o.getCreatedAt().toLocalDate().equals(today))
-                    .forEach(o -> dailyBuyCountByKey.merge(o.getStrategyName(), 1, Integer::sum));
-            if (!dailyBuyCountByKey.isEmpty()) {
-                log.info("[Engine] dailyBuyCount 복구 완료: {}", dailyBuyCountByKey);
-            }
-        } catch (Exception e) {
-            log.warn("[Engine] dailyBuyCount 복구 실패: {}", e.getMessage());
-        }
-        // 재시작 당일로 설정 → 첫 run()에서 clear() 방지
-        lastBuyCountResetDate = LocalDate.now(TradingCalendar.KST);
     }
 
     public void updateWatchTickers(List<String> tickers) {
@@ -186,6 +160,7 @@ public class StrategyEngine {
                             List<SkipRecord> skippedList) {}
 
     public RunResult run() {
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
         MarketState marketState = marketStateService.getCurrentState();
         List<String> tickers = watchTickers;
         List<String> activeStrategyNames = getActiveStrategyNames(marketState);
@@ -203,12 +178,11 @@ public class StrategyEngine {
         });
 
         int[] boughtThisRun           = {0};
+        Map<String, Integer> boughtThisRunByStrategy = new java.util.HashMap<>();
         int[] soldThisRun             = {0};
         int[] errorsThisRun           = {0};
         int[] warnSkipsThisRun        = {0};
         int[] maxPosSkipsThisRun      = {0};
-        int[] extremeFearBuysThisRun  = {0};
-        final int EXTREME_FEAR_EXTRA_SLOTS = 2;
         List<TradeRecord> boughtList  = new ArrayList<>();
         List<TradeRecord> soldList    = new ArrayList<>();
         List<SkipRecord>  skippedList = new ArrayList<>();
@@ -218,7 +192,7 @@ public class StrategyEngine {
 
         // ── Phase 1: 전체 종목 평가 ──────────────────────────────────────────
         LocalTime nowKst = LocalTime.now(TradingCalendar.KST);
-        boolean isEarlyMorning = nowKst.isBefore(LocalTime.of(9, 20));
+        boolean isEarlyMorning = nowKst.isBefore(LocalTime.of(9, 2));
         boolean indexBlocked = marketStateService.isIndexDropBlockedToday() && adminConfigStore.getIndexDropBlockPct() > 0;
 
         List<BuyCandidate> buyQueue = new ArrayList<>();
@@ -251,7 +225,7 @@ public class StrategyEngine {
             log.warn("[Engine] 지수 캡처 실패: {}", e.getMessage());
         }
 
-        // ── Phase 1.5: 지수 하락률 체크 플래그 갱신 (이미 9:20 이후이고 체크 안했다면) ──
+        // ── Phase 1.5: 지수 하락률 체크 플래그 갱신 (이미 9:07 이후이고 체크 안했다면) ──
         if (!isEarlyMorning && !marketStateService.isIndexDropCheckedToday()) {
             try {
                 List<CandleDto> idxCandles = marketClient.getIndexCandles(
@@ -288,39 +262,34 @@ public class StrategyEngine {
                     .anyMatch(p -> p.getTicker().equals(candidateTicker)
                             && (p.getBuyStage() != null ? p.getBuyStage() : 2) == 1);
 
-            boolean isExtremeFearBypass = candidate.signal().getScore() >= 80
-                    && (marketState == MarketState.BEARISH || indexBlocked);
-
             if (!isSecondaryBuy) {
                 int effectivePositions = positions.size() + boughtThisRun[0];
                 if (effectivePositions >= maxPositions) {
-                    if (isExtremeFearBypass && extremeFearBuysThisRun[0] < EXTREME_FEAR_EXTRA_SLOTS) {
-                        log.info("[Engine] 극단공포 bypass — maxPositions({}) 초과 허용 ({}/{}슬롯) ticker: {}",
-                                maxPositions, extremeFearBuysThisRun[0] + 1, EXTREME_FEAR_EXTRA_SLOTS, candidateTicker);
-                    } else {
-                        log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
-                                effectivePositions, maxPositions, candidateTicker);
-                        recordSkipped(candidate.signal(), marketState, "MAX_POSITIONS");
-                        maxPosSkipsThisRun[0]++;
-                        skippedList.add(new SkipRecord(candidateTicker, candidate.signal().getStockName(), "최대보유"));
-                        candidateResultMap.put(candidateTicker, "한도초과");
-                        continue;
-                    }
+                    log.info("[Engine] 최대 보유 종목 수 도달 ({}/{}) — BUY 스킵 ticker: {}",
+                            effectivePositions, maxPositions, candidateTicker);
+                    recordSkipped(candidate.signal(), marketState, "MAX_POSITIONS");
+                    maxPosSkipsThisRun[0]++;
+                    skippedList.add(new SkipRecord(candidateTicker, candidate.signal().getStockName(), "최대보유"));
+                    candidateResultMap.put(candidateTicker, "한도초과");
+                    continue;
                 }
 
             } else {
                 log.info("[Engine] 2차 매수(물타기) — maxPositions 제한 스킵 ticker: {}", candidateTicker);
             }
 
-            // 전략별 일일 한도 체크 (2차 매수 제외)
+            // 전략별 보유한도 체크 (2차 매수 제외 — 기존 종목 추가매수라 보유 수 불변)
             if (!isSecondaryBuy) {
-                String strategyKey = candidate.signal().getStrategyName();
-                int dailyBought = dailyBuyCountByKey.getOrDefault(strategyKey, 0);
-                int dailyLimit = getDailyLimitForStrategy(candidate.signal().getStrategyName());
-                if (dailyBought >= dailyLimit) {
-                    String skipMsg = (dailyLimit == 0) ? "전략비활성화" : "일일한도";
-                    log.info("[Engine] 전략 일일 한도 ({}/{}) — 스킵 ticker: {}, strategy: {}",
-                            dailyBought, dailyLimit, candidateTicker, candidate.signal().getStrategyName());
+                String strategyName = candidate.signal().getStrategyName();
+                int currentHeld = (int) positions.stream()
+                        .filter(p -> strategyName.equals(p.getEntryTag()))
+                        .count();
+                int pendingThisRun = boughtThisRunByStrategy.getOrDefault(strategyName, 0);
+                int holdingLimit = getDailyLimitForStrategy(strategyName);
+                if (currentHeld + pendingThisRun >= holdingLimit) {
+                    String skipMsg = (holdingLimit == 0) ? "전략비활성화" : "보유한도";
+                    log.info("[Engine] 전략 보유한도 ({}/{}) — 스킵 ticker: {}, strategy: {}",
+                            currentHeld + pendingThisRun, holdingLimit, candidateTicker, strategyName);
                     skippedList.add(new SkipRecord(candidateTicker, candidate.signal().getStockName(), skipMsg));
                     candidateResultMap.put(candidateTicker, "한도초과");
                     continue;
@@ -331,11 +300,7 @@ public class StrategyEngine {
             if (traded) {
                 if (!isSecondaryBuy) {
                     boughtThisRun[0]++;
-                    if (isExtremeFearBypass && (positions.size() + boughtThisRun[0] - 1) >= maxPositions) {
-                        extremeFearBuysThisRun[0]++;
-                    }
-                    // 일일 매수 카운터 갱신
-                    dailyBuyCountByKey.merge(candidate.signal().getStrategyName(), 1, Integer::sum);
+                    boughtThisRunByStrategy.merge(candidate.signal().getStrategyName(), 1, Integer::sum);
                 }
                 // entryTag 항상 전략명으로 저장
                 strategyStateStore.saveEntryTag(candidateTicker, candidate.signal().getStrategyName());
@@ -369,14 +334,9 @@ public class StrategyEngine {
         RunResult result = new RunResult(tickers.size(), boughtThisRun[0], soldThisRun[0], adminConfigStore.isPaused(),
                 errorsThisRun[0], warnSkipsThisRun[0], maxPosSkipsThisRun[0],
                 List.copyOf(boughtList), List.copyOf(soldList), List.copyOf(skippedList));
-        LocalDate today = LocalDate.now(TradingCalendar.KST);
         if (!today.equals(lastRunDate)) {
             todayRuns.clear();
             lastRunDate = today;
-        }
-        if (!today.equals(lastBuyCountResetDate)) {
-            dailyBuyCountByKey.clear();
-            lastBuyCountResetDate = today;
         }
         todayRuns.add(new RunRecord(lastEvalAt, result.evaluated(), result.bought(), result.sold(),
                 result.errors(), result.skippedMarketWarn(), result.skippedMaxPositions(),
@@ -494,31 +454,25 @@ public class StrategyEngine {
                     continue;
                 }
 
-                // 2. Bypass 로직: 점수가 80점 이상이면 하락장/지수블락 무시 (단, 09:20 이전은 무조건 스킵)
-                boolean isExtremeFear = signal.getScore() >= 80;
+                // 2. 09:02 이전 무조건 스킵
                 if (isEarlyMorning) {
-                    continue; // 09:20 이전은 무조건 스킵
-                }
-                
-                if (!isExtremeFear) {
-                    if (marketState == MarketState.BEARISH) {
-                        log.info("[Engine] 하락장 — BUY 스킵 (점수 {} < 80)", signal.getScore());
-                        continue;
-                    }
-                    if (indexBlocked) {
-                        log.info("[Engine] 지수 하락 차단 — BUY 스킵 (점수 {} < 80)", signal.getScore());
-                        continue;
-                    }
+                    continue;
                 }
 
-                // 3. 당일 매도 종목 재매수 차단
+                // 3. 어드민 지수 하락 차단 설정 시 매수 전면 차단
+                if (indexBlocked) {
+                    log.info("[Engine] 지수 하락 차단 — BUY 스킵 ticker: {}", ticker);
+                    continue;
+                }
+
+                // 4. 당일 매도 종목 재매수 차단
                 if (dailySellBlockService.isSoldToday(ticker)) {
                     log.info("[Engine] 당일 매도 종목 재매수 차단 — ticker: {}", ticker);
                     skippedList.add(new SkipRecord(signal.getTicker(), signal.getStockName(), "당일매도"));
                     continue;
                 }
 
-                // 4. 중복 보유 및 분할 매수 체크
+                // 5. 중복 보유 및 분할 매수 체크
                 Optional<PortfolioItemDto> existing = positions.stream()
                         .filter(p -> p.getTicker().equals(ticker))
                         .findFirst();

@@ -16,7 +16,8 @@ public record AdminStatusDto(
             double indexDropBlockPct,
             int volatilityBreakoutDailyLimit,
             int goldenCrossDailyLimit,
-            int bollingerDailyLimit
+            int bollingerDailyLimit,
+            double profitTakePct
     ) {}
 
     // Backward-compat accessors

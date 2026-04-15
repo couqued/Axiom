@@ -63,9 +63,14 @@ public class TimeCutService {
         if (!config.getApplicableStrategies().contains(strategyName)) return;
 
         LocalDate today = LocalDate.now(TradingCalendar.KST);
+        LocalDate prev = buyDates.get(ticker);
         buyDates.put(ticker, today);
         stateStore.saveBuyDate(ticker, today);
-        log.info("[TimeCut] 매수 기록 — ticker: {}, strategy: {}, date: {}", ticker, strategyName, today);
+        if (prev != null) {
+            log.info("[TimeCut] 2차 매수 — 타이머 리셋 ({} → {}) ticker: {}", prev, today, ticker);
+        } else {
+            log.info("[TimeCut] 1차 매수 — 타이머 시작 ticker: {}, strategy: {}, date: {}", ticker, strategyName, today);
+        }
     }
 
     public void clearBuy(String ticker) {

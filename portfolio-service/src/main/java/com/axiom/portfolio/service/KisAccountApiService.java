@@ -33,6 +33,15 @@ public class KisAccountApiService {
         try {
             return getKisBalance();
         } catch (Exception e) {
+            // 토큰 만료 오류면 강제 재발급 후 1회 재시도
+            if (e.getMessage() != null && e.getMessage().contains("만료")) {
+                try {
+                    kisTokenService.forceRefresh();
+                    return getKisBalance();
+                } catch (Exception retryEx) {
+                    log.error("[KIS] 잔고 조회 재시도 실패: {}", retryEx.getMessage());
+                }
+            }
             log.error("[KIS] 잔고 조회 실패 — fallback 반환: {}", e.getMessage());
             Map<String, Object> fallback = new HashMap<>();
             fallback.put("totalBalance",   BigDecimal.ZERO);

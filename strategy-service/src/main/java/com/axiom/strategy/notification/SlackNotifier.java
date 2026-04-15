@@ -109,6 +109,25 @@ public class SlackNotifier {
     }
 
     /**
+     * 익절 청산 알림.
+     */
+    public void sendProfitTake(String ticker, String stockName,
+                               BigDecimal currentPrice, BigDecimal avgPrice,
+                               double targetPct, boolean success) {
+        double roi = currentPrice.subtract(avgPrice)
+                .divide(avgPrice, 4, RoundingMode.HALF_UP)
+                .doubleValue() * 100;
+        String text = String.format(
+                "💰 *[전략 실행 | 익절]* %s\n" +
+                "> 목표 +%.1f%% 도달 → 매도\n" +
+                "> 매도가: %s원  |  수익률: +%.2f%%  |  주문: %s",
+                formatStock(stockName, ticker), targetPct,
+                formatPrice(currentPrice), roi, success ? "성공" : "실패"
+        );
+        send(text);
+    }
+
+    /**
      * 마감청산 알림 (변동성 돌파 오버나이트 방지, 15:20).
      */
     public void sendForceExit(String ticker, String stockName,

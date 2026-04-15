@@ -66,7 +66,7 @@ public class MarketStateService {
     public boolean isIndexDropCheckedToday() { return indexDropCheckedToday; }
 
     /**
-     * 09:20 이후 당일 최초 1회 호출 — 전일 대비 하락률을 계산해 매수 차단 여부를 설정한다.
+     * 09:02 이후 당일 최초 1회 호출 — 전일 대비 하락률을 계산해 매수 차단 여부를 설정한다.
      */
     public void checkAndSetIndexDropBlock(BigDecimal currentIndex, double blockPct) {
         LocalDate today = LocalDate.now(TradingCalendar.KST);
