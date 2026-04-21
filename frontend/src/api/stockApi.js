@@ -74,6 +74,14 @@ export const pauseTrading = () =>
 export const resumeTrading = () =>
   request('/api/strategy/admin/resume', { method: 'POST' })
 
+// 관리자 — 매도 중지
+export const pauseSellTrading = () =>
+  request('/api/strategy/admin/pause-sell', { method: 'POST' })
+
+// 관리자 — 매도 재개
+export const resumeSellTrading = () =>
+  request('/api/strategy/admin/resume-sell', { method: 'POST' })
+
 // 관리자 — 투자 설정 변경
 export const updateAdminConfig = (body) =>
   request('/api/strategy/admin/config', { method: 'PATCH', body: JSON.stringify(body) })

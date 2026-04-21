@@ -54,6 +54,20 @@ public class AdminController {
         return ResponseEntity.ok(currentStatus());
     }
 
+    /** 매도 중지 */
+    @PostMapping("/pause-sell")
+    public ResponseEntity<AdminStatusDto> pauseSell() {
+        adminConfigStore.setSellPaused(true);
+        return ResponseEntity.ok(currentStatus());
+    }
+
+    /** 매도 재개 */
+    @PostMapping("/resume-sell")
+    public ResponseEntity<AdminStatusDto> resumeSell() {
+        adminConfigStore.setSellPaused(false);
+        return ResponseEntity.ok(currentStatus());
+    }
+
     /** 투자 설정 변경 (부분 업데이트 허용) */
     @PatchMapping("/config")
     public ResponseEntity<AdminStatusDto> updateConfig(@RequestBody AdminConfigDto dto) {
@@ -171,7 +185,7 @@ public class AdminController {
         return new AdminStatusDto(
                 adminConfigStore.getStrategyMode(),
                 new AdminStatusDto.ModeSettingsDto(
-                        s.paused(), s.investAmountKrw(), s.maxPositions(),
+                        s.paused(), s.sellPaused(), s.investAmountKrw(), s.maxPositions(),
                         s.trailingStopPct(), s.timeCutDays(), s.indexDropBlockPct(),
                         s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
                         s.profitTakePct()),

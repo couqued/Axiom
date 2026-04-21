@@ -86,8 +86,9 @@ public class OrderClient {
                     .bodyToMono(Map.class)
                     .block();
             if ("FAILED".equals(response.get("status"))) {
-                log.error("[OrderClient] 주문 실패 - path: {}, ticker: {}", path, request.getTicker());
-                return OrderResult.fail("KIS 주문 거부");
+                String reason = response.get("failureReason") instanceof String s ? s : "KIS 주문 거부";
+                log.error("[OrderClient] 주문 실패 - path: {}, ticker: {}, reason: {}", path, request.getTicker(), reason);
+                return OrderResult.fail(reason);
             }
             log.info("[OrderClient] 주문 완료 - path: {}, ticker: {}", path, request.getTicker());
             return OrderResult.ok();

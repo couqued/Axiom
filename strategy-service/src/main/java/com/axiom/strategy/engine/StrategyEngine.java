@@ -409,6 +409,10 @@ public class StrategyEngine {
                 // SELL 신호는 시장 상태 무관하게 즉시 처리
                 // 단, entryTag가 있는 포지션은 매수한 전략만 SELL 처리 (전략 간 간섭 방지)
                 if (signal.getAction() == SignalDto.Action.SELL) {
+                    if (adminConfigStore.isSellPaused()) {
+                        log.info("[Engine] 매도 중지 상태 — SELL 스킵 ticker: {}", ticker);
+                        continue;
+                    }
                     Optional<PortfolioItemDto> heldPos = positions.stream()
                             .filter(p -> p.getTicker().equals(ticker)).findFirst();
                     if (heldPos.isPresent() && heldPos.get().getEntryTag() != null

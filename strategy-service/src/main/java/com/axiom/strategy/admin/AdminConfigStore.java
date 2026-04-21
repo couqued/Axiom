@@ -34,11 +34,11 @@ public class AdminConfigStore {
         int    defaultTc        = strategyConfig.getTimeCut().getMaxHoldingDays();
         double defaultIdx       = 1.0;
 
-        settings = new ModeSettings(false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos, 0.0);
+        settings = new ModeSettings(false, false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos, 0.0);
         loadFromFile();
     }
 
-    public record ModeSettings(boolean paused, int investAmountKrw, int maxPositions,
+    public record ModeSettings(boolean paused, boolean sellPaused, int investAmountKrw, int maxPositions,
                                double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                                int volatilityBreakoutDailyLimit,
                                int goldenCrossDailyLimit,
@@ -52,6 +52,7 @@ public class AdminConfigStore {
 
     // Delegation to settings
     public boolean isPaused()                  { return settings.paused(); }
+    public boolean isSellPaused()              { return settings.sellPaused(); }
     public int getInvestAmountKrw()            { return settings.investAmountKrw(); }
     public int getMaxPositions()               { return settings.maxPositions(); }
     public double getTrailingStopPct()         { return settings.trailingStopPct(); }
@@ -72,7 +73,16 @@ public class AdminConfigStore {
 
     public void setPaused(boolean paused) {
         ModeSettings s = settings;
-        updateSettings(paused,
+        updateSettings(paused, s.sellPaused(),
+                s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
+                s.indexDropBlockPct(),
+                s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
+                s.profitTakePct());
+    }
+
+    public void setSellPaused(boolean sellPaused) {
+        ModeSettings s = settings;
+        updateSettings(s.paused(), sellPaused,
                 s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
                 s.indexDropBlockPct(),
                 s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
@@ -83,19 +93,19 @@ public class AdminConfigStore {
                           double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                           int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit,
                           double profitTakePct) {
-        updateSettings(settings.paused(),
+        updateSettings(settings.paused(), settings.sellPaused(),
                 investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct,
                 volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct);
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
 
-    private void updateSettings(boolean paused,
+    private void updateSettings(boolean paused, boolean sellPaused,
                                 int investAmountKrw, int maxPositions,
                                 double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                                 int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit,
                                 double profitTakePct) {
-        settings = new ModeSettings(paused, investAmountKrw, maxPositions,
+        settings = new ModeSettings(paused, sellPaused, investAmountKrw, maxPositions,
                 trailingStopPct, timeCutDays, indexDropBlockPct,
                 volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct);
         saveToFile();
@@ -133,7 +143,8 @@ public class AdminConfigStore {
     }
 
     private ModeSettings loadModeSettings(JsonNode node, ModeSettings def) {
-        boolean paused   = node.has("paused")               ? node.get("paused").asBoolean(def.paused())                     : def.paused();
+        boolean paused      = node.has("paused")            ? node.get("paused").asBoolean(def.paused())                     : def.paused();
+        boolean sellPaused  = node.has("sellPaused")        ? node.get("sellPaused").asBoolean(def.sellPaused())             : def.sellPaused();
         int invest       = node.has("investAmountKrw")      ? node.get("investAmountKrw").asInt(def.investAmountKrw())        : def.investAmountKrw();
         int maxPos       = node.has("maxPositions")         ? node.get("maxPositions").asInt(def.maxPositions())              : def.maxPositions();
         double ts        = node.has("trailingStopPct")      ? node.get("trailingStopPct").asDouble(def.trailingStopPct())     : def.trailingStopPct();
@@ -151,7 +162,7 @@ public class AdminConfigStore {
         double profitTake = node.has("profitTakePct")
                 ? node.get("profitTakePct").asDouble(def.profitTakePct())
                 : def.profitTakePct();
-        return new ModeSettings(paused, invest, maxPos, ts, tc, idx, volDaily, gcDaily, bollDaily, profitTake);
+        return new ModeSettings(paused, sellPaused, invest, maxPos, ts, tc, idx, volDaily, gcDaily, bollDaily, profitTake);
     }
 
     public record Snapshot(String strategyMode, ModeSettings settings) {}

@@ -9,6 +9,7 @@ public record AdminStatusDto(
 ) {
     public record ModeSettingsDto(
             boolean paused,
+            boolean sellPaused,
             int investAmountKrw,
             int maxPositions,
             double trailingStopPct,

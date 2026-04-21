@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getAdminStatus, pauseTrading, resumeTrading, updateAdminConfig, manualExit, markSold } from '../api/stockApi'
+import { getAdminStatus, pauseTrading, resumeTrading, pauseSellTrading, resumeSellTrading, updateAdminConfig, manualExit, markSold } from '../api/stockApi'
 
 export default function Admin({ onClose, onConfigUpdated }) {
   const [status, setStatus] = useState(null)
@@ -7,6 +7,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
   const [error, setError] = useState(null)
 
   const [toggling, setToggling] = useState(false)
+  const [sellToggling, setSellToggling] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
 
@@ -60,6 +61,21 @@ export default function Admin({ onClose, onConfigUpdated }) {
       setError('상태 변경 실패: ' + e.message)
     } finally {
       setToggling(false)
+    }
+  }
+
+  const handleSellToggle = async () => {
+    if (!status) return
+    const isSellPaused = status.settings?.sellPaused
+    setSellToggling(true)
+    setError(null)
+    try {
+      const res = isSellPaused ? await resumeSellTrading() : await pauseSellTrading()
+      setStatus(res)
+    } catch (e) {
+      setError('매도 상태 변경 실패: ' + e.message)
+    } finally {
+      setSellToggling(false)
     }
   }
 
@@ -197,24 +213,47 @@ export default function Admin({ onClose, onConfigUpdated }) {
             {/* 긴급 제어 */}
             <div className="admin-section">
               <h3 className="admin-section-title">긴급 제어</h3>
-              <div className="admin-status-row">
-                <span className={`admin-status-dot ${status.settings?.paused ? 'stopped' : 'running'}`} />
-                <span className="admin-status-label">
-                  {status.settings?.paused ? '매매 중단 중' : '매매 실행 중'}
-                </span>
+              <div className="admin-emergency-grid">
+                <div className="admin-emergency-col">
+                  <div className="admin-status-row">
+                    <span className={`admin-status-dot ${status.settings?.paused ? 'stopped' : 'running'}`} />
+                    <span className="admin-status-label">
+                      {status.settings?.paused ? '매수 중단 중' : '매수 실행 중'}
+                    </span>
+                  </div>
+                  <button
+                    className={`admin-toggle-btn ${status.settings?.paused ? 'resume' : 'pause'}`}
+                    onClick={handleToggle}
+                    disabled={toggling}
+                  >
+                    {toggling
+                      ? '처리 중...'
+                      : status.settings?.paused
+                        ? '▶ 매매 재개'
+                        : '■ 매매 중단'}
+                  </button>
+                </div>
+                <div className="admin-emergency-col">
+                  <div className="admin-status-row">
+                    <span className={`admin-status-dot ${status.settings?.sellPaused ? 'sell-stopped' : 'running'}`} />
+                    <span className="admin-status-label">
+                      {status.settings?.sellPaused ? '매도 중지 중' : '매도 실행 중'}
+                    </span>
+                  </div>
+                  <button
+                    className={`admin-toggle-btn ${status.settings?.sellPaused ? 'resume-sell' : 'pause-sell'}`}
+                    onClick={handleSellToggle}
+                    disabled={sellToggling}
+                  >
+                    {sellToggling
+                      ? '처리 중...'
+                      : status.settings?.sellPaused
+                        ? '▶ 매도 재개'
+                        : '■ 매도 중지'}
+                  </button>
+                </div>
               </div>
-              <button
-                className={`admin-toggle-btn ${status.settings?.paused ? 'resume' : 'pause'}`}
-                onClick={handleToggle}
-                disabled={toggling}
-              >
-                {toggling
-                  ? '처리 중...'
-                  : status.settings?.paused
-                    ? '▶ 매매 재개'
-                    : '■ 매매 중단'}
-              </button>
-              <p className="admin-note">중단 중에도 15:20 강제 청산은 계속 실행됩니다</p>
+              <p className="admin-note">매도 중지 시 TimeCut·강제청산 포함 모든 자동 매도가 중단됩니다</p>
             </div>
 
             {/* 투자 설정 */}

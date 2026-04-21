@@ -151,6 +151,10 @@ public class TimeCutService {
 
     private boolean executeSell(String ticker, BigDecimal currentPrice,
                                 List<PortfolioItemDto> positions, int elapsed, int maxDays) {
+        if (adminConfigStore.isSellPaused()) {
+            log.info("[TimeCut] 매도 중지 상태 — 타임컷 청산 스킵 ticker: {}", ticker);
+            return false;
+        }
         return positions.stream()
                 .filter(p -> p.getTicker().equals(ticker))
                 .findFirst()

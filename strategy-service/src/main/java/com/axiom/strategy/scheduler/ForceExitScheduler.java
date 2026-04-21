@@ -1,5 +1,6 @@
 package com.axiom.strategy.scheduler;
 
+import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.OrderRequest;
@@ -41,11 +42,16 @@ public class ForceExitScheduler {
     private final OrderClient orderClient;
     private final SlackNotifier slackNotifier;
     private final DailySellBlockService dailySellBlockService;
+    private final AdminConfigStore adminConfigStore;
 
     @Scheduled(cron = "0 19 15 * * MON-FRI", zone = "Asia/Seoul")
     public void forceExit() {
         if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
             log.info("[ForceExit] 공휴일 — 스킵");
+            return;
+        }
+        if (adminConfigStore.isSellPaused()) {
+            log.info("[ForceExit] 매도 중지 상태 — 마감청산 스킵");
             return;
         }
 
@@ -118,6 +124,10 @@ public class ForceExitScheduler {
     public void exitOvernightPositions() {
         if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
             log.info("[ForceExit] 공휴일 — 스킵");
+            return;
+        }
+        if (adminConfigStore.isSellPaused()) {
+            log.info("[ForceExit] 매도 중지 상태 — 오버나이트 청산 스킵");
             return;
         }
 
