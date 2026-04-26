@@ -2,6 +2,7 @@ import { useState } from 'react'
 import Dashboard from './pages/Dashboard'
 import TradeHistory from './pages/TradeHistory'
 import Strategy from './pages/Strategy'
+import MlPerformance from './pages/MlPerformance'
 import StrategyGuide from './pages/StrategyGuide'
 import Admin from './pages/Admin'
 import './App.css'
@@ -10,6 +11,7 @@ const TABS = [
   { id: 'dashboard', label: '대시보드', icon: '📊' },
   { id: 'history', label: '매매내역', icon: '📋' },
   { id: 'strategy', label: '전략', icon: '⚡' },
+  { id: 'ml', label: 'ML성과', icon: '🤖' },
   { id: 'guide', label: '케이스', icon: '📖' },
 ]
 
@@ -35,7 +37,8 @@ function App() {
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'history' && <TradeHistory />}
         {tab === 'strategy' && <Strategy liveAdminConfig={liveAdminConfig} />}
-        {tab === 'guide' && <StrategyGuide />}
+        {tab === 'ml'      && <MlPerformance />}
+        {tab === 'guide'   && <StrategyGuide />}
       </main>
 
       <nav className="bottom-nav">

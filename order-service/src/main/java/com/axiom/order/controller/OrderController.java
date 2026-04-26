@@ -56,14 +56,6 @@ public class OrderController {
         return ResponseEntity.ok(orderService.getOrdersByTicker(ticker));
     }
 
-    @PostMapping("/api/orders/sell-all")
-    public ResponseEntity<?> sellAll() {
-        if (!marketHoursChecker.isMarketOpen()) {
-            return marketClosedResponse();
-        }
-        return ResponseEntity.ok(orderService.sellAll());
-    }
-
     @DeleteMapping("/api/orders/admin/by-ticker")
     public ResponseEntity<Void> deleteByTicker(@RequestParam String ticker) {
         orderService.deleteByTicker(ticker);

@@ -34,7 +34,9 @@ public class AdminConfigStore {
         int    defaultTc        = strategyConfig.getTimeCut().getMaxHoldingDays();
         double defaultIdx       = 1.0;
 
-        settings = new ModeSettings(false, false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx, defaultMaxPos, defaultMaxPos, defaultMaxPos, 0.0);
+        settings = new ModeSettings(false, false, defaultInvest, defaultMaxPos, defaultTs, defaultTc, defaultIdx,
+                defaultMaxPos, defaultMaxPos, defaultMaxPos, 0.0,
+                defaultMaxPos, 0.75, true, false, false);
         loadFromFile();
     }
 
@@ -43,7 +45,12 @@ public class AdminConfigStore {
                                int volatilityBreakoutDailyLimit,
                                int goldenCrossDailyLimit,
                                int bollingerDailyLimit,
-                               double profitTakePct) {}
+                               double profitTakePct,
+                               int mlDailyLimit,
+                               double mlBuyThreshold,
+                               boolean mlEntryTimingEnabled,
+                               boolean mlPaused,
+                               boolean mlSellPaused) {}
 
     // ── Accessors ────────────────────────────────────────────────────────────
 
@@ -62,6 +69,11 @@ public class AdminConfigStore {
     public int getGoldenCrossDailyLimit()           { return settings.goldenCrossDailyLimit(); }
     public int getBollingerDailyLimit()             { return settings.bollingerDailyLimit(); }
     public double getProfitTakePct()                { return settings.profitTakePct(); }
+    public int getMlDailyLimit()                    { return settings.mlDailyLimit(); }
+    public double getMlBuyThreshold()               { return settings.mlBuyThreshold(); }
+    public boolean isMlEntryTimingEnabled()         { return settings.mlEntryTimingEnabled(); }
+    public boolean isMlPaused()                     { return settings.mlPaused(); }
+    public boolean isMlSellPaused()                 { return settings.mlSellPaused(); }
 
     // ── Setters ──────────────────────────────────────────────────────────────
 
@@ -77,7 +89,9 @@ public class AdminConfigStore {
                 s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
                 s.indexDropBlockPct(),
                 s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
-                s.profitTakePct());
+                s.profitTakePct(),
+                s.mlDailyLimit(), s.mlBuyThreshold(), s.mlEntryTimingEnabled(),
+                s.mlPaused(), s.mlSellPaused());
     }
 
     public void setSellPaused(boolean sellPaused) {
@@ -86,16 +100,44 @@ public class AdminConfigStore {
                 s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
                 s.indexDropBlockPct(),
                 s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
-                s.profitTakePct());
+                s.profitTakePct(),
+                s.mlDailyLimit(), s.mlBuyThreshold(), s.mlEntryTimingEnabled(),
+                s.mlPaused(), s.mlSellPaused());
+    }
+
+    public void setMlPaused(boolean mlPaused) {
+        ModeSettings s = settings;
+        updateSettings(s.paused(), s.sellPaused(),
+                s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
+                s.indexDropBlockPct(),
+                s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
+                s.profitTakePct(),
+                s.mlDailyLimit(), s.mlBuyThreshold(), s.mlEntryTimingEnabled(),
+                mlPaused, s.mlSellPaused());
+    }
+
+    public void setMlSellPaused(boolean mlSellPaused) {
+        ModeSettings s = settings;
+        updateSettings(s.paused(), s.sellPaused(),
+                s.investAmountKrw(), s.maxPositions(), s.trailingStopPct(), s.timeCutDays(),
+                s.indexDropBlockPct(),
+                s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
+                s.profitTakePct(),
+                s.mlDailyLimit(), s.mlBuyThreshold(), s.mlEntryTimingEnabled(),
+                s.mlPaused(), mlSellPaused);
     }
 
     public void setConfig(int investAmountKrw, int maxPositions,
                           double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                           int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit,
-                          double profitTakePct) {
-        updateSettings(settings.paused(), settings.sellPaused(),
+                          double profitTakePct,
+                          int mlDailyLimit, double mlBuyThreshold, boolean mlEntryTimingEnabled) {
+        ModeSettings s = settings;
+        updateSettings(s.paused(), s.sellPaused(),
                 investAmountKrw, maxPositions, trailingStopPct, timeCutDays, indexDropBlockPct,
-                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct);
+                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct,
+                mlDailyLimit, mlBuyThreshold, mlEntryTimingEnabled,
+                s.mlPaused(), s.mlSellPaused());
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
@@ -104,10 +146,13 @@ public class AdminConfigStore {
                                 int investAmountKrw, int maxPositions,
                                 double trailingStopPct, int timeCutDays, double indexDropBlockPct,
                                 int volatilityBreakoutDailyLimit, int goldenCrossDailyLimit, int bollingerDailyLimit,
-                                double profitTakePct) {
+                                double profitTakePct,
+                                int mlDailyLimit, double mlBuyThreshold, boolean mlEntryTimingEnabled,
+                                boolean mlPaused, boolean mlSellPaused) {
         settings = new ModeSettings(paused, sellPaused, investAmountKrw, maxPositions,
                 trailingStopPct, timeCutDays, indexDropBlockPct,
-                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct);
+                volatilityBreakoutDailyLimit, goldenCrossDailyLimit, bollingerDailyLimit, profitTakePct,
+                mlDailyLimit, mlBuyThreshold, mlEntryTimingEnabled, mlPaused, mlSellPaused);
         saveToFile();
     }
 
@@ -162,7 +207,24 @@ public class AdminConfigStore {
         double profitTake = node.has("profitTakePct")
                 ? node.get("profitTakePct").asDouble(def.profitTakePct())
                 : def.profitTakePct();
-        return new ModeSettings(paused, sellPaused, invest, maxPos, ts, tc, idx, volDaily, gcDaily, bollDaily, profitTake);
+        int mlDaily = node.has("mlDailyLimit")
+                ? node.get("mlDailyLimit").asInt(def.mlDailyLimit())
+                : def.mlDailyLimit();
+        double mlThr = node.has("mlBuyThreshold")
+                ? node.get("mlBuyThreshold").asDouble(def.mlBuyThreshold())
+                : def.mlBuyThreshold();
+        boolean mlEntry = node.has("mlEntryTimingEnabled")
+                ? node.get("mlEntryTimingEnabled").asBoolean(def.mlEntryTimingEnabled())
+                : def.mlEntryTimingEnabled();
+        boolean mlPaused = node.has("mlPaused")
+                ? node.get("mlPaused").asBoolean(def.mlPaused())
+                : def.mlPaused();
+        boolean mlSellPaused = node.has("mlSellPaused")
+                ? node.get("mlSellPaused").asBoolean(def.mlSellPaused())
+                : def.mlSellPaused();
+        return new ModeSettings(paused, sellPaused, invest, maxPos, ts, tc, idx,
+                volDaily, gcDaily, bollDaily, profitTake,
+                mlDaily, mlThr, mlEntry, mlPaused, mlSellPaused);
     }
 
     public record Snapshot(String strategyMode, ModeSettings settings) {}

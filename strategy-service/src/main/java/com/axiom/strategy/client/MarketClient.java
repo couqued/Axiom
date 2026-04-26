@@ -1,6 +1,7 @@
 package com.axiom.strategy.client;
 
 import com.axiom.strategy.dto.CandleDto;
+import com.axiom.strategy.dto.MinuteCandleDto;
 import com.axiom.strategy.dto.StockPriceDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -83,6 +84,23 @@ public class MarketClient {
         } catch (Exception e) {
             log.warn("[MarketClient] ticker-names 조회 실패: {}", e.getMessage());
             return Map.of();
+        }
+    }
+
+    /**
+     * market-service에서 종목 분봉 데이터 조회 (ML Entry Quality 계산용).
+     * 실패 시 빈 리스트 반환 → 호출자가 shortMult=1.0 중립으로 처리해야 한다.
+     */
+    public List<MinuteCandleDto> getMinuteCandles(String ticker, int count) {
+        try {
+            return marketWebClient.get()
+                    .uri("/api/stocks/{ticker}/minute-candles?count={count}", ticker, count)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<List<MinuteCandleDto>>() {})
+                    .block();
+        } catch (Exception e) {
+            log.warn("[MarketClient] 분봉 조회 실패 - ticker: {}, error: {}", ticker, e.getMessage());
+            return List.of();
         }
     }
 

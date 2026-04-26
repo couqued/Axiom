@@ -4,8 +4,11 @@
 
 set -e
 
-echo "=== [1/2] 백엔드 및 프론트엔드 서비스 종료 ==="
-kubectl scale deployment/market-service deployment/order-service deployment/portfolio-service deployment/strategy-service deployment/api-gateway deployment/frontend -n axiom --replicas=0
+echo "=== [1/2] 백엔드, 프론트엔드, ML, Cloudflare 종료 ==="
+kubectl scale deployment/market-service deployment/order-service deployment/portfolio-service \
+  deployment/strategy-service deployment/api-gateway deployment/frontend \
+  deployment/ml-service deployment/cloudflared \
+  -n axiom --replicas=0
 
 echo "=== [2/2] 인프라 종료 (Kafka → Zookeeper, PostgreSQL 순) ==="
 kubectl scale statefulset/kafka -n axiom --replicas=0

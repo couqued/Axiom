@@ -2,6 +2,7 @@ package com.axiom.strategy.engine;
 
 import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.MarketClient;
+import com.axiom.strategy.client.MlClient;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.config.StrategyConfig;
@@ -13,6 +14,7 @@ import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.dto.SignalGapDto;
 import com.axiom.strategy.dto.SkippedSignalRequest;
 import com.axiom.strategy.dto.StockPriceDto;
+import com.axiom.strategy.dto.TradePlanDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.service.BollingerReserveService;
 import com.axiom.strategy.service.DailySellBlockService;
@@ -58,6 +60,10 @@ public class StrategyEngine {
     private final DailySellBlockService dailySellBlockService;
     private final BollingerReserveService bollingerReserveService;
     private final List<TradingStrategy> strategies;
+    private final com.axiom.strategy.service.MlPositionStore mlPositionStore;
+    private final com.axiom.strategy.service.MlExitService mlExitService;
+    private final com.axiom.strategy.service.MlDeferTracker mlDeferTracker;
+    private final MlClient mlClient;
 
     private volatile List<String> watchTickers = List.of();
     private volatile List<SignalGapDto> signalGapCache = List.of();
@@ -191,17 +197,20 @@ public class StrategyEngine {
                 marketState, tickers.size(), activeStrategyNames, positions.size(), maxPositions);
 
         // ── Phase 1: 전체 종목 평가 ──────────────────────────────────────────
-        LocalTime nowKst = LocalTime.now(TradingCalendar.KST);
-        boolean isEarlyMorning = nowKst.isBefore(LocalTime.of(9, 2));
+        // 09:02 이전 BUY 전면 스킵 가드는 ML 도입과 함께 제거됨 (09:00 부터 매수 허용).
+        // 시초가 급변은 ML EntryQuality 의 3축 multiplier + 갭업/FOMO 가드가 담당.
+        boolean isEarlyMorning = false;  // legacy 파라미터 — 항상 false, 추후 제거 가능
         boolean indexBlocked = marketStateService.isIndexDropBlockedToday() && adminConfigStore.getIndexDropBlockPct() > 0;
 
         List<BuyCandidate> buyQueue = new ArrayList<>();
+        int[] breadthStats = {0, 0}; // [0]=상승, [1]=전체
         for (String ticker : tickers) {
             try {
                 Optional<BuyCandidate> candidate = collectBuyCandidate(
                         ticker, candleDays, activeStrategyNames, positions,
                         soldThisRun, errorsThisRun, warnSkipsThisRun,
-                        soldList, skippedList, marketState, isEarlyMorning, indexBlocked);
+                        soldList, skippedList, marketState, isEarlyMorning, indexBlocked,
+                        breadthStats);
                 candidate.ifPresent(buyQueue::add);
                 Thread.sleep(200);
             } catch (InterruptedException ie) {
@@ -211,6 +220,11 @@ public class StrategyEngine {
                 log.error("[Engine] 종목 처리 오류 — ticker: {}, error: {}", ticker, e.getMessage());
                 errorsThisRun[0]++;
             }
+        }
+
+        // market_breadth 갱신 (다음 사이클부터 ML 추론에 반영)
+        if (breadthStats[1] > 0) {
+            marketStateService.setMarketBreadth((double) breadthStats[0] / breadthStats[1]);
         }
 
         // 오늘 장 초기 지수 캡처
@@ -252,11 +266,22 @@ public class StrategyEngine {
 
         Map<String, String> candidateResultMap = new java.util.LinkedHashMap<>();
 
-        if (adminConfigStore.isPaused()) {
-            log.info("[Engine] 매매 중단 상태 — BUY 스킵 (타임컷·SELL은 실행됨)");
-        } else { for (BuyCandidate candidate : buyQueue) {
-            // 2차 매수(물타기) 여부 확인 — stage=1 보유 중 + 신호 stage=2
+        for (BuyCandidate candidate : buyQueue) {
             String candidateTicker = candidate.signal().getTicker();
+            boolean isMlCandidate = "ml-prediction".equals(candidate.signal().getStrategyName());
+            // 전략별 매수 중단 체크
+            if (isMlCandidate && adminConfigStore.isMlPaused()) {
+                log.info("[Engine] ML 매수 중단 상태 — BUY 스킵 ticker: {}", candidateTicker);
+                candidateResultMap.put(candidateTicker, "중단");
+                continue;
+            }
+            if (!isMlCandidate && adminConfigStore.isPaused()) {
+                log.info("[Engine] 매매 중단 상태 — BUY 스킵 ticker: {}", candidateTicker);
+                candidateResultMap.put(candidateTicker, "중단");
+                continue;
+            }
+            {
+            // 2차 매수(물타기) 여부 확인 — stage=1 보유 중 + 신호 stage=2
             int newStage = candidate.signal().getBuyStage() != null ? candidate.signal().getBuyStage() : 2;
             boolean isSecondaryBuy = newStage == 2 && positions.stream()
                     .anyMatch(p -> p.getTicker().equals(candidateTicker)
@@ -304,6 +329,20 @@ public class StrategyEngine {
                 }
                 // entryTag 항상 전략명으로 저장
                 strategyStateStore.saveEntryTag(candidateTicker, candidate.signal().getStrategyName());
+                // ML 전략 매수 체결 시 staged → active 승격 + 전용 Slack 알림
+                if ("ml-prediction".equals(candidate.signal().getStrategyName())) {
+                    mlPositionStore.activate(candidateTicker, candidate.signal().getPrice());
+                    mlDeferTracker.clear(candidateTicker);
+                    mlPositionStore.getActive(candidateTicker).ifPresent(ap -> {
+                        TradePlanDto plan = ap.plan();
+                        slackNotifier.sendMlBuy(
+                                candidateTicker, candidate.signal().getStockName(),
+                                ap.actualEntryPrice(),
+                                plan.confidence(), candidate.signal().getScore(),
+                                plan.takeProfitPrice(), plan.stopLossPrice(),
+                                plan.expectedDays(), plan.maxDays());
+                    });
+                }
                 boughtList.add(new TradeRecord(
                         candidateTicker,
                         candidate.signal().getStockName(),
@@ -313,7 +352,30 @@ public class StrategyEngine {
             } else {
                 candidateResultMap.put(candidateTicker, "예산부족");
             }
-        } } // end pause else + buyQueue loop
+        } } // end buyQueue loop
+
+        // ML 전략 BUY 후보 중 매수 미선정된 종목 → DEFER 카운트
+        // multiplier < 0.90 (가격 과열)으로 밀린 경우는 블랙리스트 카운트 제외 — 눌림목 복귀 후 재진입 허용
+        for (BuyCandidate candidate : buyQueue) {
+            String t = candidate.signal().getTicker();
+            String strat = candidate.signal().getStrategyName();
+            if (!"ml-prediction".equals(strat)) continue;
+            String outcome = candidateResultMap.getOrDefault(t, "대기");
+            if (!"매수".equals(outcome)) {
+                boolean countForBlacklist = mlPositionStore.getStaged(t)
+                        .map(staged -> staged.multiplier() >= 0.90)
+                        .orElse(true);
+                mlDeferTracker.recordDefer(t, countForBlacklist);
+                mlPositionStore.clearStaged(t);
+            }
+        }
+
+        // ML 활성 포지션 TP/SL/maxDays 청산 검사
+        try {
+            mlExitService.check(positions);
+        } catch (Exception ex) {
+            log.warn("[Engine] MlExitService 체크 실패: {}", ex.getMessage());
+        }
 
         // BUY 랭킹 저장
         int[] rank = {1};
@@ -358,7 +420,8 @@ public class StrategyEngine {
             List<SkipRecord> skippedList,
             MarketState marketState,
             boolean isEarlyMorning,
-            boolean indexBlocked) {
+            boolean indexBlocked,
+            int[] breadthStats) {
         StockPriceDto priceData = marketClient.getCurrentPrice(ticker);
         if (priceData == null || priceData.getCurrentPrice() == null) {
             log.warn("[Engine] 현재가 조회 실패 — ticker: {}", ticker);
@@ -370,6 +433,16 @@ public class StrategyEngine {
             log.warn("[Engine] 캔들 데이터 없음 — ticker: {}", ticker);
             skippedList.add(new SkipRecord(ticker, priceData.getStockName(), "캔들없음"));
             return Optional.empty();
+        }
+
+        // market_breadth 누적: 전일 종가 대비 현재가 상승 여부 추적
+        if (breadthStats != null) {
+            java.math.BigDecimal prevClose = historical.get(historical.size() - 1).getClosePrice();
+            java.math.BigDecimal currPrice = priceData.getCurrentPrice();
+            if (prevClose != null && prevClose.compareTo(java.math.BigDecimal.ZERO) > 0) {
+                breadthStats[1]++;
+                if (currPrice.compareTo(prevClose) > 0) breadthStats[0]++;
+            }
         }
 
         CandleDto liveCandle = CandleDto.builder()
@@ -458,12 +531,7 @@ public class StrategyEngine {
                     continue;
                 }
 
-                // 2. 09:02 이전 무조건 스킵
-                if (isEarlyMorning) {
-                    continue;
-                }
-
-                // 3. 어드민 지수 하락 차단 설정 시 매수 전면 차단
+                // 2. 어드민 지수 하락 차단 설정 시 매수 전면 차단
                 if (indexBlocked) {
                     log.info("[Engine] 지수 하락 차단 — BUY 스킵 ticker: {}", ticker);
                     continue;
@@ -631,7 +699,11 @@ public class StrategyEngine {
             default -> OrderResult.fail("알 수 없는 액션");
         };
 
-        slackNotifier.sendTradeResult(signal, result.success(), result.errorMsg(), avgBuyPrice);
+        // ML 매수 성공 알림은 activate() 후 sendMlBuy()로 처리
+        if (!(result.success() && "ml-prediction".equals(signal.getStrategyName())
+                && signal.getAction() == SignalDto.Action.BUY)) {
+            slackNotifier.sendTradeResult(signal, result.success(), result.errorMsg(), avgBuyPrice);
+        }
         return result.success();
     }
 
@@ -639,12 +711,13 @@ public class StrategyEngine {
         List<String> enabled = strategyConfig.getEnabledStrategies();
         if ("all-strategies".equals(adminConfigStore.getStrategyMode())) return enabled;
         if (!strategyConfig.getMarketFilter().isEnabled()) return enabled;
+        // ml-prediction 은 시장 regime 피처를 자체 학습하므로 모든 상태에서 실행
         return switch (state) {
             case BULLISH  -> enabled.stream()
-                    .filter(s -> List.of("volatility-breakout", "golden-cross").contains(s))
+                    .filter(s -> List.of("volatility-breakout", "golden-cross", "ml-prediction").contains(s))
                     .toList();
             case SIDEWAYS, BEARISH -> enabled.stream()
-                    .filter(s -> List.of("rsi-bollinger").contains(s))
+                    .filter(s -> List.of("rsi-bollinger", "ml-prediction").contains(s))
                     .toList();
         };
     }
@@ -654,6 +727,7 @@ public class StrategyEngine {
             case "volatility-breakout" -> adminConfigStore.getVolatilityBreakoutDailyLimit();
             case "golden-cross"        -> adminConfigStore.getGoldenCrossDailyLimit();
             case "rsi-bollinger"       -> adminConfigStore.getBollingerDailyLimit();
+            case "ml-prediction"       -> adminConfigStore.getMlDailyLimit();
             default                    -> adminConfigStore.getMaxPositions();
         };
     }
@@ -877,6 +951,42 @@ public class StrategyEngine {
         String detail = String.format("목표가=%.0f, Range=%.0f, 거래량비율=%.1fx", targetPrice, range, volRatio);
         return new SignalGapDto(0, ticker, stockName, "volatility-breakout",
                 currentPrice, targetPrice, gapPct, -1, 0, score, detail);
+    }
+
+    // ── ML 드라이런 ────────────────────────────────────────────────────────────
+
+    public record MlDryRunResult(String ticker, String stockName,
+                                  double confidence, boolean aboveThreshold, String reason) {}
+
+    /** 실제 주문 없이 watch-tickers 전체에 ML 예측을 실행하고 확신도 순으로 반환. */
+    public List<MlDryRunResult> runMlDryRun() {
+        int candleDays = strategyConfig.getCandleDays();
+        List<CandleDto> indexCandles = marketStateService.getKospiCandlesCached();
+        double threshold = adminConfigStore.getMlBuyThreshold();
+        double marketBreadth = marketStateService.getMarketBreadth();
+        Map<String, String> tickerNames = marketClient.getTickerNames();
+        List<MlDryRunResult> results = new ArrayList<>();
+
+        for (String ticker : watchTickers) {
+            try {
+                List<CandleDto> candles = marketClient.getCandles(ticker, candleDays);
+                if (candles == null || candles.isEmpty()) continue;
+                TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, marketBreadth);
+                if (plan == null) continue;
+                String name = tickerNames.getOrDefault(ticker, ticker);
+                results.add(new MlDryRunResult(ticker, name, plan.confidence(),
+                        plan.confidence() >= threshold, plan.reason()));
+                Thread.sleep(100);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                log.warn("[MlDryRun] 오류 — ticker: {}, error: {}", ticker, e.getMessage());
+            }
+        }
+
+        results.sort(Comparator.comparingDouble(MlDryRunResult::confidence).reversed());
+        return results;
     }
 
     private double calcAvgVolume(List<CandleDto> candles, int period) {

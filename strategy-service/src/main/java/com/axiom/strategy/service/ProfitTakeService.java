@@ -51,6 +51,10 @@ public class ProfitTakeService {
                 .filter(p -> p.getTicker().equals(ticker))
                 .findFirst()
                 .ifPresent(position -> {
+                    if ("ml-prediction".equals(position.getEntryTag())) {
+                        log.debug("[ProfitTake] {} | ML 포지션 — 익절 비율 적용 제외", ticker);
+                        return;
+                    }
                     BigDecimal avgPrice = position.getAvgPrice();
                     log.info("[ProfitTake] {} | 현재가: {} | avgPrice: {} | buyStage: {} | pct: {}%",
                             ticker, currentPrice, avgPrice, position.getBuyStage(), pct);

@@ -65,6 +65,44 @@ public class MarketStateService {
     public boolean isIndexDropBlockedToday() { return indexDropBlockedToday; }
     public boolean isIndexDropCheckedToday() { return indexDropCheckedToday; }
 
+    // ── ML market_breadth 캐시 ────────────────────────────────────────────────
+    // watch-tickers 중 전일 대비 상승 종목 비율. StrategyEngine 루프 종료 후 갱신되므로
+    // ML 추론에는 직전 사이클(~5분 전) 값이 사용된다.
+    private volatile double marketBreadth = 0.5;
+
+    public double getMarketBreadth() { return marketBreadth; }
+
+    public void setMarketBreadth(double breadth) {
+        this.marketBreadth = Math.max(0.0, Math.min(1.0, breadth));
+        log.debug("[MarketState] market_breadth 갱신 → {}", String.format("%.2f", this.marketBreadth));
+    }
+
+    // ── ML용 지수 캔들 캐시 (60일치) ─────────────────────────────────────────
+    private volatile List<CandleDto> cachedKospiCandles = List.of();
+    private volatile long cachedKospiCandlesAt = 0L;
+    private static final long KOSPI_CACHE_TTL_MS = 5 * 60 * 1000L; // 5분
+
+    /**
+     * ML 전략에서 시장 regime 피처 계산에 쓸 코스피 일봉 캔들.
+     * 5분 주기 전략 호출 내에서 종목당 호출이 중복되지 않도록 캐시한다.
+     */
+    public List<CandleDto> getKospiCandlesCached() {
+        long now = System.currentTimeMillis();
+        if (cachedKospiCandles.isEmpty() || now - cachedKospiCandlesAt > KOSPI_CACHE_TTL_MS) {
+            try {
+                List<CandleDto> fresh = marketClient.getIndexCandles(
+                        strategyConfig.getMarketFilter().getIndexCode(), 60);
+                if (!fresh.isEmpty()) {
+                    cachedKospiCandles   = fresh;
+                    cachedKospiCandlesAt = now;
+                }
+            } catch (Exception e) {
+                log.warn("[MarketState] KOSPI 캔들 캐시 갱신 실패: {}", e.getMessage());
+            }
+        }
+        return cachedKospiCandles;
+    }
+
     /**
      * 09:02 이후 당일 최초 1회 호출 — 전일 대비 하락률을 계산해 매수 차단 여부를 설정한다.
      */

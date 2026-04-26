@@ -5,6 +5,7 @@ import com.axiom.strategy.client.PortfolioClient;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
+import com.axiom.strategy.engine.StrategyEngine;
 import com.axiom.strategy.persistence.StrategyStateStore;
 import com.axiom.strategy.service.BollingerReserveService;
 import com.axiom.strategy.service.DailySellBlockService;
@@ -33,6 +34,7 @@ public class AdminController {
     private final DailySellBlockService dailySellBlockService;
     private final BollingerReserveService bollingerReserveService;
     private final StrategyStateStore strategyStateStore;
+    private final StrategyEngine strategyEngine;
 
     /** 현재 관리자 설정 상태 조회 */
     @GetMapping("/status")
@@ -68,6 +70,34 @@ public class AdminController {
         return ResponseEntity.ok(currentStatus());
     }
 
+    /** ML 매수 중단 */
+    @PostMapping("/pause-ml")
+    public ResponseEntity<AdminStatusDto> pauseMl() {
+        adminConfigStore.setMlPaused(true);
+        return ResponseEntity.ok(currentStatus());
+    }
+
+    /** ML 매수 재개 */
+    @PostMapping("/resume-ml")
+    public ResponseEntity<AdminStatusDto> resumeMl() {
+        adminConfigStore.setMlPaused(false);
+        return ResponseEntity.ok(currentStatus());
+    }
+
+    /** ML 매도 중지 */
+    @PostMapping("/pause-ml-sell")
+    public ResponseEntity<AdminStatusDto> pauseMlSell() {
+        adminConfigStore.setMlSellPaused(true);
+        return ResponseEntity.ok(currentStatus());
+    }
+
+    /** ML 매도 재개 */
+    @PostMapping("/resume-ml-sell")
+    public ResponseEntity<AdminStatusDto> resumeMlSell() {
+        adminConfigStore.setMlSellPaused(false);
+        return ResponseEntity.ok(currentStatus());
+    }
+
     /** 투자 설정 변경 (부분 업데이트 허용) */
     @PatchMapping("/config")
     public ResponseEntity<AdminStatusDto> updateConfig(@RequestBody AdminConfigDto dto) {
@@ -75,10 +105,14 @@ public class AdminController {
             adminConfigStore.setStrategyMode(dto.strategyMode());
         }
 
+        if (dto.mlPaused() != null)     adminConfigStore.setMlPaused(dto.mlPaused());
+        if (dto.mlSellPaused() != null) adminConfigStore.setMlSellPaused(dto.mlSellPaused());
+
         boolean hasSettingFields = dto.investAmountKrw() != null || dto.maxPositions() != null
                 || dto.trailingStopPct() != null || dto.timeCutDays() != null || dto.indexDropBlockPct() != null
                 || dto.volatilityBreakoutDailyLimit() != null || dto.goldenCrossDailyLimit() != null
-                || dto.bollingerDailyLimit() != null || dto.profitTakePct() != null;
+                || dto.bollingerDailyLimit() != null || dto.profitTakePct() != null
+                || dto.mlDailyLimit() != null || dto.mlBuyThreshold() != null || dto.mlEntryTimingEnabled() != null;
         if (hasSettingFields) {
             AdminConfigStore.ModeSettings current = adminConfigStore.getSettings();
 
@@ -91,10 +125,21 @@ public class AdminController {
             int    newGcDaily   = dto.goldenCrossDailyLimit()          != null ? dto.goldenCrossDailyLimit()          : current.goldenCrossDailyLimit();
             int    newBollDaily = dto.bollingerDailyLimit()            != null ? dto.bollingerDailyLimit()            : current.bollingerDailyLimit();
             double newPtPct     = dto.profitTakePct()                  != null ? dto.profitTakePct()                  : current.profitTakePct();
-            adminConfigStore.setConfig(newInvest, newMaxPos, newTs, newTc, newIdx, newVolDaily, newGcDaily, newBollDaily, newPtPct);
+            int     newMlDaily   = dto.mlDailyLimit()           != null ? dto.mlDailyLimit()           : current.mlDailyLimit();
+            double  newMlThr     = dto.mlBuyThreshold()         != null ? dto.mlBuyThreshold()         : current.mlBuyThreshold();
+            boolean newMlEntry   = dto.mlEntryTimingEnabled()   != null ? dto.mlEntryTimingEnabled()   : current.mlEntryTimingEnabled();
+            adminConfigStore.setConfig(newInvest, newMaxPos, newTs, newTc, newIdx,
+                    newVolDaily, newGcDaily, newBollDaily, newPtPct,
+                    newMlDaily, newMlThr, newMlEntry);
         }
 
         return ResponseEntity.ok(currentStatus());
+    }
+
+    /** ML 예측 드라이런 — 실제 주문 없이 watch-tickers 전체 예측 결과 조회 (확신도 순) */
+    @GetMapping("/ml/dry-run")
+    public ResponseEntity<java.util.List<StrategyEngine.MlDryRunResult>> mlDryRun() {
+        return ResponseEntity.ok(strategyEngine.runMlDryRun());
     }
 
     /** 트레일링 스탑 현황 조회 — ticker별 고점/기준가 */
@@ -188,7 +233,9 @@ public class AdminController {
                         s.paused(), s.sellPaused(), s.investAmountKrw(), s.maxPositions(),
                         s.trailingStopPct(), s.timeCutDays(), s.indexDropBlockPct(),
                         s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
-                        s.profitTakePct()),
+                        s.profitTakePct(),
+                        s.mlDailyLimit(), s.mlBuyThreshold(), s.mlEntryTimingEnabled(),
+                        s.mlPaused(), s.mlSellPaused()),
                 marketStateService.isIndexDropBlockedToday(),
                 marketStateService.isIndexDropCheckedToday(),
                 bollingerReserveService.getAllReservations()

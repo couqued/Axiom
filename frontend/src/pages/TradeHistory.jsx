@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getOrders, getStockPrice, sellAll } from '../api/stockApi'
+import { getOrders, getStockPrice } from '../api/stockApi'
 
 const CLOSE_REASON_KO = {
   SIGNAL: '전략 신호',
@@ -11,6 +11,7 @@ const STRATEGY_KO = {
   'golden-cross': '골든크로스',
   'rsi-bollinger': 'RSI+볼린저',
   'volatility-breakout': '변동성 돌파',
+  'ml-prediction': 'ML 예측',
 }
 const MARKET_KO = { BULLISH: '상승장', SIDEWAYS: '횡보장' }
 
@@ -38,8 +39,6 @@ export default function TradeHistory() {
   const [stockNames, setStockNames] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [isSelling, setIsSelling] = useState(false)
-
   const load = () => {
     setLoading(true)
     getOrders()
@@ -66,27 +65,11 @@ export default function TradeHistory() {
 
   useEffect(() => { load() }, [])
 
-  const handleSellAll = () => {
-    if (!window.confirm('보유 종목을 모두 시장가 매도합니다. 계속하시겠습니까?')) return
-    setIsSelling(true)
-    sellAll()
-      .then(results => {
-        const count = results.length
-        alert(`${count}개 종목 매도 완료`)
-        load()
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setIsSelling(false))
-  }
-
   return (
     <div className="page">
       <div className="page-header">
         <h2>매매 내역</h2>
         <button className="refresh-btn" onClick={load}>새로고침</button>
-        <button className="sell-all-btn" onClick={handleSellAll} disabled={isSelling}>
-          {isSelling ? '매도 중...' : '전체 매도'}
-        </button>
       </div>
 
       {loading && <div className="loading">로딩 중...</div>}

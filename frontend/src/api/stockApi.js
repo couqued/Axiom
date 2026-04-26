@@ -82,6 +82,22 @@ export const pauseSellTrading = () =>
 export const resumeSellTrading = () =>
   request('/api/strategy/admin/resume-sell', { method: 'POST' })
 
+// 관리자 — ML 매수 중단
+export const pauseMlTrading = () =>
+  request('/api/strategy/admin/pause-ml', { method: 'POST' })
+
+// 관리자 — ML 매수 재개
+export const resumeMlTrading = () =>
+  request('/api/strategy/admin/resume-ml', { method: 'POST' })
+
+// 관리자 — ML 매도 중지
+export const pauseMlSellTrading = () =>
+  request('/api/strategy/admin/pause-ml-sell', { method: 'POST' })
+
+// 관리자 — ML 매도 재개
+export const resumeMlSellTrading = () =>
+  request('/api/strategy/admin/resume-ml-sell', { method: 'POST' })
+
 // 관리자 — 투자 설정 변경
 export const updateAdminConfig = (body) =>
   request('/api/strategy/admin/config', { method: 'PATCH', body: JSON.stringify(body) })
@@ -125,6 +141,13 @@ export const markSold = (tickers) =>
     body: JSON.stringify({ tickers }),
   })
 
-// 전체 매도 (보유 종목 일괄 시장가 매도)
-export const sellAll = () =>
-  request('/api/orders/sell-all', { method: 'POST' })
+export const mlDryRun = () =>
+  request('/api/strategy/admin/ml/dry-run')
+
+// ML 성과 — 모델 정보 + 승률 요약
+export const getMlPerformanceSummary = () =>
+  request('/api/strategy/ml-performance/summary')
+
+// ML 성과 — 거래 이력 (페이지네이션)
+export const getMlTradeHistory = (page = 0, size = 20) =>
+  request(`/api/strategy/ml-performance/trades?page=${page}&size=${size}`)

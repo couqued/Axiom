@@ -244,6 +244,61 @@ public class SlackNotifier {
     }
 
     /**
+     * ML 전략 매수 체결 알림.
+     */
+    public void sendMlBuy(String ticker, String stockName, java.math.BigDecimal entryPrice,
+                          double confidence, double effectiveScore,
+                          java.math.BigDecimal tp, java.math.BigDecimal sl,
+                          int expectedDays, int maxDays) {
+        String text = String.format(
+                "✅ *[ML 예측 매수]* %s\n" +
+                "> 확신도: %.0f%%  |  스코어: %.1f\n" +
+                "> 매수가: %s원  |  TP: %s원  |  SL: %s원\n" +
+                "> 예상 보유: %d일 (최대 %d일)",
+                formatStock(stockName, ticker),
+                confidence * 100, effectiveScore,
+                formatPrice(entryPrice), formatPrice(tp), formatPrice(sl),
+                expectedDays, maxDays);
+        send(text);
+    }
+
+    /**
+     * ML 전략 청산 알림 (TP / SL / 최대보유).
+     */
+    public void sendMlExit(String ticker, String stockName, String tag,
+                           java.math.BigDecimal entryPrice, java.math.BigDecimal currentPrice,
+                           int daysHeld, java.math.BigDecimal tp, java.math.BigDecimal sl,
+                           int maxDays, boolean success) {
+        double roi = 0;
+        if (entryPrice != null && entryPrice.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            roi = currentPrice.subtract(entryPrice)
+                    .divide(entryPrice, 4, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+        }
+        String emoji = "ML TP".equals(tag) ? "💰" : "ML SL".equals(tag) ? "🛑" : "⏱️";
+        String text = String.format(
+                "%s *[ML 예측 %s]* %s\n" +
+                "> 수익률: %s%.2f%%  |  %d거래일 보유\n" +
+                "> 매수: %s원 → 매도: %s원\n" +
+                "> TP: %s원  |  SL: %s원  |  최대: %d일  |  주문: %s",
+                emoji, tag, formatStock(stockName, ticker),
+                roi >= 0 ? "+" : "", roi, daysHeld,
+                formatPrice(entryPrice), formatPrice(currentPrice),
+                formatPrice(tp), formatPrice(sl), maxDays, success ? "성공" : "실패");
+        send(text);
+    }
+
+    /**
+     * ML 전략 — 연속 DEFER {@code count}회로 당일 블랙리스트 등록.
+     */
+    public void sendMlBlacklist(String ticker, String stockName, int count) {
+        String text = String.format(
+                "⛔ *[ML 블랙리스트]* %s\n> 연속 DEFER %d회 → 당일 추가 평가 제외",
+                formatStock(stockName, ticker), count);
+        send(text);
+    }
+
+    /**
      * 오류 알림.
      */
     public void sendError(String message) {

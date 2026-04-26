@@ -9,7 +9,10 @@
       "Bash(kubectl rollout:*)",
       "Bash(kubectl exec:*)",
       "Bash(wmic process:*)",
-      "Bash(tasklist /fi \"imagename eq java.exe\")"
+      "Bash(tasklist /fi \"imagename eq java.exe\")",
+      "Bash(kubectl apply *)",
+      "Bash(./gradlew :strategy-service:compileJava --no-daemon)",
+      "Bash(java *)"
     ]
   }
 }

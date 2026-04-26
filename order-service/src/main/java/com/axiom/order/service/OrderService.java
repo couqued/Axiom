@@ -1,11 +1,8 @@
 package com.axiom.order.service;
 
-import com.axiom.order.client.PortfolioClient;
 import com.axiom.order.dto.OrderRequest;
 import com.axiom.order.dto.OrderResponse;
-import com.axiom.order.dto.PortfolioItemDto;
 import com.axiom.order.entity.TradeOrder;
-import com.axiom.order.entity.TradeOrder.OrderType;
 import com.axiom.order.kafka.OrderEventProducer;
 import com.axiom.order.repository.TradeOrderRepository;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +12,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -27,7 +23,6 @@ public class OrderService {
     private final TradeOrderRepository orderRepository;
     private final KisOrderApiService kisOrderApiService;
     private final OrderEventProducer orderEventProducer;
-    private final PortfolioClient portfolioClient;
 
     @Transactional
     public OrderResponse placeOrder(OrderRequest request) {
@@ -89,22 +84,5 @@ public class OrderService {
     @Transactional
     public void deleteByTicker(String ticker) {
         orderRepository.deleteByTicker(ticker);
-    }
-
-    public List<OrderResponse> sellAll() {
-        List<PortfolioItemDto> positions = portfolioClient.getPositions();
-        List<OrderResponse> results = new ArrayList<>();
-        for (PortfolioItemDto p : positions) {
-            OrderRequest req = new OrderRequest();
-            req.setTicker(p.getTicker());
-            req.setStockName(p.getStockName());
-            req.setOrderType(OrderType.SELL);
-            req.setQuantity(p.getQuantity());
-            req.setPrice(BigDecimal.ZERO);
-            req.setCloseReason("FORCE_EXIT");
-            results.add(placeOrder(req));
-        }
-        log.info("[sellAll] 종목 수: {}", results.size());
-        return results;
     }
 }

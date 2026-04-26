@@ -1,11 +1,13 @@
 package com.axiom.market.controller;
 
 import com.axiom.market.dto.CandleDto;
+import com.axiom.market.dto.MinuteCandleDto;
 import com.axiom.market.dto.StockInfoDto;
 import com.axiom.market.dto.StockPriceDto;
 import com.axiom.market.service.CandleService;
 import com.axiom.market.service.IndexCandleService;
 import com.axiom.market.service.KisMarketApiService;
+import com.axiom.market.service.MinuteCandleService;
 import com.axiom.market.service.StockSearchService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +24,7 @@ public class StockController {
     private final StockSearchService stockSearchService;
     private final CandleService candleService;
     private final IndexCandleService indexCandleService;
+    private final MinuteCandleService minuteCandleService;
 
     // 현재가 조회: GET /api/market/stocks/{ticker}/price → 게이트웨이가 /api/stocks/{ticker}/price 로 라우팅
     @GetMapping("/stocks/{ticker}/price")
@@ -47,6 +50,15 @@ public class StockController {
             @PathVariable String ticker,
             @RequestParam(defaultValue = "60") int days) {
         return ResponseEntity.ok(candleService.getCandles(ticker, days));
+    }
+
+    // 분봉 조회: GET /api/market/stocks/{ticker}/minute-candles?count=10
+    // ML Entry Quality Multiplier 계산용 — 오래된 순 정렬, 30초 TTL 캐시
+    @GetMapping("/stocks/{ticker}/minute-candles")
+    public ResponseEntity<List<MinuteCandleDto>> getMinuteCandles(
+            @PathVariable String ticker,
+            @RequestParam(defaultValue = "10") int count) {
+        return ResponseEntity.ok(minuteCandleService.getMinuteCandles(ticker, count));
     }
 
     // 지수 일봉 조회: GET /api/market/index/{code}/candles?days=25

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getAdminStatus, pauseTrading, resumeTrading, pauseSellTrading, resumeSellTrading, updateAdminConfig, manualExit, markSold } from '../api/stockApi'
+import { getAdminStatus, pauseTrading, resumeTrading, pauseSellTrading, resumeSellTrading, pauseMlTrading, resumeMlTrading, pauseMlSellTrading, resumeMlSellTrading, updateAdminConfig, manualExit, markSold, mlDryRun } from '../api/stockApi'
 
 export default function Admin({ onClose, onConfigUpdated }) {
   const [status, setStatus] = useState(null)
@@ -8,6 +8,8 @@ export default function Admin({ onClose, onConfigUpdated }) {
 
   const [toggling, setToggling] = useState(false)
   const [sellToggling, setSellToggling] = useState(false)
+  const [mlToggling, setMlToggling] = useState(false)
+  const [mlSellToggling, setMlSellToggling] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
 
@@ -19,9 +21,14 @@ export default function Admin({ onClose, onConfigUpdated }) {
   const [markResult, setMarkResult] = useState(null)
   const [marking, setMarking] = useState(false)
 
+  const [dryRunResults, setDryRunResults] = useState(null)
+  const [dryRunLoading, setDryRunLoading] = useState(false)
+  const [dryRunError, setDryRunError] = useState(null)
+
   const [fields, setFields] = useState({
     invest: '', maxPos: '', trailing: '', profitTake: '', timeCut: '', indexDrop: '',
     volBreakoutDaily: '', goldenCrossDaily: '', bollingerDaily: '',
+    mlDaily: '', mlThreshold: '', mlEntryTiming: true,
   })
 
   const initFields = (s) => ({
@@ -34,6 +41,9 @@ export default function Admin({ onClose, onConfigUpdated }) {
     volBreakoutDaily: String(s.settings.volatilityBreakoutDailyLimit),
     goldenCrossDaily: String(s.settings.goldenCrossDailyLimit),
     bollingerDaily:   String(s.settings.bollingerDailyLimit),
+    mlDaily:          String(s.settings.mlDailyLimit ?? 0),
+    mlThreshold:      String(Math.round((s.settings.mlBuyThreshold ?? 0.6) * 100)),
+    mlEntryTiming:    s.settings.mlEntryTimingEnabled ?? true,
   })
 
   useEffect(() => {
@@ -79,6 +89,36 @@ export default function Admin({ onClose, onConfigUpdated }) {
     }
   }
 
+  const handleMlToggle = async () => {
+    if (!status) return
+    const isMlPaused = status.settings?.mlPaused
+    setMlToggling(true)
+    setError(null)
+    try {
+      const res = isMlPaused ? await resumeMlTrading() : await pauseMlTrading()
+      setStatus(res)
+    } catch (e) {
+      setError('ML 매수 상태 변경 실패: ' + e.message)
+    } finally {
+      setMlToggling(false)
+    }
+  }
+
+  const handleMlSellToggle = async () => {
+    if (!status) return
+    const isMlSellPaused = status.settings?.mlSellPaused
+    setMlSellToggling(true)
+    setError(null)
+    try {
+      const res = isMlSellPaused ? await resumeMlSellTrading() : await pauseMlSellTrading()
+      setStatus(res)
+    } catch (e) {
+      setError('ML 매도 상태 변경 실패: ' + e.message)
+    } finally {
+      setMlSellToggling(false)
+    }
+  }
+
   const handleStrategyModeChange = async (mode) => {
     if (mode === status?.strategyMode) return
     try {
@@ -99,6 +139,8 @@ export default function Admin({ onClose, onConfigUpdated }) {
     const volBreakoutDaily = parseInt(fields.volBreakoutDaily, 10)
     const goldenCrossDaily = parseInt(fields.goldenCrossDaily, 10)
     const bollingerDaily   = parseInt(fields.bollingerDaily, 10)
+    const mlDaily          = parseInt(fields.mlDaily, 10)
+    const mlThresholdPct   = parseInt(fields.mlThreshold, 10)
     if (isNaN(invest) || invest < 1 || isNaN(maxPos) || maxPos < 1
         || isNaN(trailing) || trailing <= 0 || isNaN(timeCut) || timeCut < 1
         || isNaN(indexDrop) || indexDrop < 0) {
@@ -111,6 +153,14 @@ export default function Admin({ onClose, onConfigUpdated }) {
     }
     if (isNaN(volBreakoutDaily) || volBreakoutDaily < 0 || isNaN(goldenCrossDaily) || goldenCrossDaily < 0 || isNaN(bollingerDaily) || bollingerDaily < 0) {
       setSaveMsg({ ok: false, text: '일일 한도는 0 이상의 숫자를 입력하세요' })
+      return
+    }
+    if (isNaN(mlDaily) || mlDaily < 0) {
+      setSaveMsg({ ok: false, text: 'ML 일일 한도는 0 이상의 숫자를 입력하세요' })
+      return
+    }
+    if (isNaN(mlThresholdPct) || mlThresholdPct < 50 || mlThresholdPct > 95) {
+      setSaveMsg({ ok: false, text: 'ML 매수 확신도는 50~95 사이의 정수로 입력하세요' })
       return
     }
     setSaving(true)
@@ -126,6 +176,9 @@ export default function Admin({ onClose, onConfigUpdated }) {
         volatilityBreakoutDailyLimit: volBreakoutDaily,
         goldenCrossDailyLimit: goldenCrossDaily,
         bollingerDailyLimit: bollingerDaily,
+        mlDailyLimit: mlDaily,
+        mlBuyThreshold: mlThresholdPct / 100,
+        mlEntryTimingEnabled: !!fields.mlEntryTiming,
       })
       setStatus(res)
       setFields(initFields(res))
@@ -152,6 +205,20 @@ export default function Admin({ onClose, onConfigUpdated }) {
       setMarkResult({ error: e.message })
     } finally {
       setMarking(false)
+    }
+  }
+
+  const handleMlDryRun = async () => {
+    setDryRunLoading(true)
+    setDryRunError(null)
+    setDryRunResults(null)
+    try {
+      const res = await mlDryRun()
+      setDryRunResults(res)
+    } catch (e) {
+      setDryRunError('드라이런 실패: ' + e.message)
+    } finally {
+      setDryRunLoading(false)
     }
   }
 
@@ -253,7 +320,7 @@ export default function Admin({ onClose, onConfigUpdated }) {
                   </button>
                 </div>
               </div>
-              <p className="admin-note">매도 중지 시 TimeCut·강제청산 포함 모든 자동 매도가 중단됩니다</p>
+              <p className="admin-note">ML 전략 제외한 기존 전략(골든크로스·변동성돌파·볼린저)에만 적용됩니다<br/>매도 중지 시 TimeCut·강제청산 포함 모든 자동 매도가 중단됩니다</p>
             </div>
 
             {/* 투자 설정 */}
@@ -389,6 +456,160 @@ export default function Admin({ onClose, onConfigUpdated }) {
                   </div>
                 )
               })()}
+            </div>
+
+            {/* ML 전략 설정 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">ML 전략 설정</h3>
+              <p className="admin-note">
+                ML 예측 전략 전용 설정. 기존 3개 전략과 독립적으로 동작합니다.<br/>
+                분봉 미세조정: 분봉 기준 눌림목 대기 + 갭업/시초가 과열 구간 매수 보류.
+              </p>
+              <div className="admin-emergency-grid">
+                <div className="admin-emergency-col">
+                  <div className="admin-status-row">
+                    <span className={`admin-status-dot ${status.settings?.mlPaused ? 'stopped' : 'running'}`} />
+                    <span className="admin-status-label">
+                      {status.settings?.mlPaused ? 'ML 매수 중단 중' : 'ML 매수 실행 중'}
+                    </span>
+                  </div>
+                  <button
+                    className={`admin-toggle-btn ${status.settings?.mlPaused ? 'resume' : 'pause'}`}
+                    onClick={handleMlToggle}
+                    disabled={mlToggling}
+                  >
+                    {mlToggling
+                      ? '처리 중...'
+                      : status.settings?.mlPaused
+                        ? '▶ ML 매매 재개'
+                        : '■ ML 매매 중단'}
+                  </button>
+                </div>
+                <div className="admin-emergency-col">
+                  <div className="admin-status-row">
+                    <span className={`admin-status-dot ${status.settings?.mlSellPaused ? 'sell-stopped' : 'running'}`} />
+                    <span className="admin-status-label">
+                      {status.settings?.mlSellPaused ? 'ML 매도 중지 중' : 'ML 매도 실행 중'}
+                    </span>
+                  </div>
+                  <button
+                    className={`admin-toggle-btn ${status.settings?.mlSellPaused ? 'resume-sell' : 'pause-sell'}`}
+                    onClick={handleMlSellToggle}
+                    disabled={mlSellToggling}
+                  >
+                    {mlSellToggling
+                      ? '처리 중...'
+                      : status.settings?.mlSellPaused
+                        ? '▶ ML 매도 재개'
+                        : '■ ML 매도 중지'}
+                  </button>
+                </div>
+              </div>
+              <p className="admin-note" style={{ marginBottom: '12px' }}>ML 전략에만 적용됩니다. TP/SL/최대보유일 청산 포함 ML 관련 모든 매도가 중단됩니다</p>
+              <div className="admin-fields">
+                <label className="admin-field">
+                  <span className="admin-field-label">ML 일일 보유 한도 (0=비활성)</span>
+                  <input
+                    type="number"
+                    className="admin-input"
+                    value={fields.mlDaily}
+                    onChange={e => setField('mlDaily', e.target.value)}
+                    min={0}
+                    max={20}
+                    step={1}
+                  />
+                </label>
+                <label className="admin-field">
+                  <span className="admin-field-label">ML 매수 확신도 (%, 50~95)</span>
+                  <input
+                    type="number"
+                    className="admin-input"
+                    value={fields.mlThreshold}
+                    onChange={e => setField('mlThreshold', e.target.value)}
+                    min={50}
+                    max={95}
+                    step={1}
+                  />
+                </label>
+                <label className="admin-field" style={{ gridColumn: '1 / -1' }}>
+                  <span className="admin-field-label">
+                    <input
+                      type="checkbox"
+                      checked={!!fields.mlEntryTiming}
+                      onChange={e => setField('mlEntryTiming', e.target.checked)}
+                      style={{ marginRight: '6px' }}
+                    />
+                    분봉 미세조정 사용 (눌림목 대기 + 갭업/FOMO 가드)
+                  </span>
+                </label>
+              </div>
+              <button
+                className="admin-save-btn"
+                onClick={handleSaveConfig}
+                disabled={saving}
+              >
+                {saving ? '저장 중...' : 'ML 설정 저장'}
+              </button>
+              {saveMsg && (
+                <p className={`result-msg ${saveMsg.ok ? 'success' : 'fail'}`}>{saveMsg.text}</p>
+              )}
+            </div>
+
+            {/* ML 드라이런 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">ML 예측 테스트 (드라이런)</h3>
+              <p className="admin-note">
+                실제 주문 없이 현재 감시 종목 전체에 ML 예측을 실행합니다.<br/>
+                현재 설정된 확신도 임계값({fields.mlThreshold}%) 기준으로 통과 여부를 표시합니다.<br/>
+                종목 수에 따라 수십 초 소요될 수 있습니다.
+              </p>
+              <button
+                className="admin-save-btn"
+                onClick={handleMlDryRun}
+                disabled={dryRunLoading}
+              >
+                {dryRunLoading ? '예측 중... (종목 수에 따라 수십 초)' : 'ML 드라이런 실행'}
+              </button>
+              {dryRunError && <p className="result-msg fail">{dryRunError}</p>}
+              {dryRunResults && (
+                <div style={{ marginTop: '12px' }}>
+                  <p className="admin-note" style={{ marginBottom: '6px' }}>
+                    총 {dryRunResults.length}종목 예측 완료 —
+                    통과: <strong style={{ color: '#81c784' }}>{dryRunResults.filter(r => r.aboveThreshold).length}종목</strong>
+                  </p>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid #444', color: '#aaa' }}>
+                          <th style={{ textAlign: 'left', padding: '4px 8px' }}>종목</th>
+                          <th style={{ textAlign: 'right', padding: '4px 8px' }}>확신도</th>
+                          <th style={{ textAlign: 'center', padding: '4px 8px' }}>임계값 통과</th>
+                          <th style={{ textAlign: 'left', padding: '4px 8px', maxWidth: '160px' }}>사유</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dryRunResults.map(r => (
+                          <tr key={r.ticker} style={{ borderBottom: '1px solid #2a2a2a' }}>
+                            <td style={{ padding: '4px 8px', fontWeight: r.aboveThreshold ? 700 : 400 }}>
+                              {r.stockName}<br/>
+                              <span style={{ color: '#888', fontSize: '11px' }}>{r.ticker}</span>
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '4px 8px', color: r.aboveThreshold ? '#81c784' : '#aaa' }}>
+                              {(r.confidence * 100).toFixed(1)}%
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '4px 8px' }}>
+                              {r.aboveThreshold ? '✅' : '—'}
+                            </td>
+                            <td style={{ padding: '4px 8px', color: '#888', fontSize: '12px', maxWidth: '160px', wordBreak: 'break-all' }}>
+                              {r.reason}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 향후 추가 예정 */}

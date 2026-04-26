@@ -20,6 +20,9 @@ logs/
 # Kubernetes - 실제 시크릿 값 포함 파일 (커밋 금지)
 k8s/secrets.yaml
 
+# docs
+docs/
+
 # Node.js / Frontend
 frontend/node_modules/
 frontend/dist/

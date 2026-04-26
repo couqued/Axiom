@@ -18,7 +18,12 @@ public record AdminStatusDto(
             int volatilityBreakoutDailyLimit,
             int goldenCrossDailyLimit,
             int bollingerDailyLimit,
-            double profitTakePct
+            double profitTakePct,
+            int mlDailyLimit,
+            double mlBuyThreshold,
+            boolean mlEntryTimingEnabled,
+            boolean mlPaused,
+            boolean mlSellPaused
     ) {}
 
     // Backward-compat accessors

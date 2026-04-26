@@ -6,6 +6,9 @@ spring:
     name: strategy-service
   config:
     import: optional:classpath:application-secret.yml
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
   task:
     scheduling:
       pool:
@@ -27,7 +30,7 @@ strategy:
   watch-tickers:       # 전략 감시 대상 종목 (최대 수십 개 가능, 5~10개 권장)
     - "005930"         # 삼성전자
     - "000660"         # SK하이닉스
-  candle-days: 60      # 지표 계산용 캔들 개수
+  candle-days: 90      # 지표 계산용 캔들 개수 (ML 최소 80 필요)
   position-sizing:
     invest-amount-krw: 500000   # 1회 매수 금액(원). 수량 = floor(금액 / 현재가)
     max-positions: 4            # 동시에 보유할 수 있는 최대 종목 수 (초과 시 BUY 스킵)
@@ -35,6 +38,7 @@ strategy:
     - golden-cross       # 상승장 — 스윙 (며칠~몇 주)
     - volatility-breakout # 상승장 — 당일 매매
     - rsi-bollinger      # 횡보장 — 단기~스윙 (1~5일)
+    - ml-prediction      # XGBoost 예측 — 모든 시장 상태
   market-filter:
     enabled: true        # false 시 모든 전략 항상 실행
     index-code: "0001"   # 코스피
@@ -77,6 +81,37 @@ order-service:
 
 portfolio-service:
   url: ${PORTFOLIO_SERVICE_URL:http://localhost:8083}
+
+ml-service:
+  url: ${ML_SERVICE_URL:http://localhost:8085}
+
+ml-prediction:
+  entry-timing:
+    enabled: true
+    minute-candle-count: 10
+    max-defer-count: 3
+    short-mult:
+      min-candles: 5
+    session-mult:
+      below-open: 1.10
+      mild:       1.00
+      moderate:   0.85
+      elevated:   0.60
+      near-high-drop: true
+    gap-mult:
+      normal:  1.00
+      mild:    0.90
+      large:   0.70
+      extreme: 0.50
+    guards:
+      gap-up:
+        enabled: true
+        gap-pct: 2.0
+        until:   "09:15"
+      fomo:
+        enabled: true
+        pct-from-open: 2.0
+        until:         "10:30"
 
 slack:
   webhook-url: ${SLACK_WEBHOOK_URL:PLACEHOLDER}   # application-secret.yml 또는 env var로 오버라이드

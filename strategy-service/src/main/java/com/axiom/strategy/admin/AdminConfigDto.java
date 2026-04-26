@@ -10,5 +10,10 @@ public record AdminConfigDto(
         Integer volatilityBreakoutDailyLimit,
         Integer goldenCrossDailyLimit,
         Integer bollingerDailyLimit,
-        Double profitTakePct
+        Double profitTakePct,
+        Integer mlDailyLimit,
+        Double mlBuyThreshold,
+        Boolean mlEntryTimingEnabled,
+        Boolean mlPaused,
+        Boolean mlSellPaused
 ) {}

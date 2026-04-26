@@ -14,6 +14,7 @@ docker build -f Dockerfile.portfolio-service -t axiom/portfolio-service:latest .
 docker build -f Dockerfile.strategy-service -t axiom/strategy-service:latest . && echo "✓ strategy-service"
 docker build -f Dockerfile.frontend         -t axiom/frontend:latest         . && echo "✓ frontend"
 docker build -f k8s/pod-watcher/Dockerfile  -t axiom/pod-watcher:latest       k8s/pod-watcher/ && echo "✓ pod-watcher"
+docker build -f ml-service/Dockerfile      -t axiom/ml-service:latest         ml-service/      && echo "✓ ml-service"
 
 echo ""
 echo "=== 빌드 완료 ==="

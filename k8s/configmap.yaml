@@ -16,6 +16,7 @@ data:
   ORDER_SERVICE_URL: "http://order-service:8082"
   PORTFOLIO_SERVICE_URL: "http://portfolio-service:8083"
   STRATEGY_SERVICE_URL: "http://strategy-service:8084"
+  ML_SERVICE_URL: "http://ml-service:8085"
 
   # strategy-service admin-config.json 경로 (PVC 마운트 위치)
   ADMIN_CONFIG_PATH: "/app/data/admin-config.json"

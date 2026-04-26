@@ -38,5 +38,19 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     restart: unless-stopped
 
+  ml-service:
+    build: ./ml-service
+    container_name: axiom-ml-service
+    ports:
+      - "8085:8085"
+    environment:
+      MARKET_SERVICE_URL: http://host.docker.internal:8081
+      MODEL_DIR: /app/models
+    volumes:
+      - ./ml-service/models:/app/models
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
 volumes:
   postgres-data:

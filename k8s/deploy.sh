@@ -37,13 +37,16 @@ kubectl apply -f "$SCRIPT_DIR/order-service.yaml"
 kubectl apply -f "$SCRIPT_DIR/portfolio-service.yaml"
 kubectl apply -f "$SCRIPT_DIR/strategy-service.yaml"
 kubectl apply -f "$SCRIPT_DIR/api-gateway.yaml"
+kubectl apply -f "$SCRIPT_DIR/ml-service.yaml"
 
 echo "=== [6/7] 프론트엔드 ==="
 kubectl apply -f "$SCRIPT_DIR/frontend.yaml"
 
-echo "=== [7/7] Pod Watcher ==="
+echo "=== [7/7] Pod Watcher, Cloudflare Tunnel, ML CronJob ==="
 kubectl apply -f "$SCRIPT_DIR/pod-watcher/rbac.yaml"
 kubectl apply -f "$SCRIPT_DIR/pod-watcher/deployment.yaml"
+kubectl apply -f "$SCRIPT_DIR/cloudflare-tunnel.yaml"
+kubectl apply -f "$SCRIPT_DIR/ml-training-cronjob.yaml"
 
 echo ""
 echo "=== 배포 완료 ==="

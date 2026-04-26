@@ -27,8 +27,8 @@ public class StrategyState {
     @Column(nullable = false, length = 10)
     private String ticker;
 
-    @Column(nullable = false, length = 100)
-    private String value;  // BigDecimal.toPlainString() | LocalDate.toString()
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String value;  // BigDecimal.toPlainString() | LocalDate.toString() | JSON (ML_PLAN)
 
     @Column(nullable = false)
     private LocalDateTime updatedAt;

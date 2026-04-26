@@ -11,15 +11,16 @@
 3. [골든크로스 전략 (상승장)](#3-골든크로스-전략-상승장)
 4. [변동성 돌파 전략 (상승장 단기)](#4-변동성-돌파-전략-상승장-단기)
 5. [RSI + 볼린저밴드 통합 전략 (횡보장)](#5-rsi--볼린저밴드-통합-전략-횡보장)
-6. [트레일링 스탑](#6-트레일링-스탑)
-7. [타임 컷](#7-타임-컷)
-8. [개장 초 보호 + 지수 하락 매수 차단](#8-개장-초-보호--지수-하락-매수-차단)
-9. [스케줄러 전체 구조](#9-스케줄러-전체-구조)
-10. [설정 방법](#10-설정-방법)
-11. [포지션 사이징](#11-포지션-사이징)
-12. [종목 선정 우선순위 점수화 \[계획\]](#12-종목-선정-우선순위-점수화-계획)
-13. [매수 신호 근접도 (Signal Gap)](#13-매수-신호-근접도-signal-gap)
-14. [하락장(BEARISH) 전략 \[계획\]](#14-하락장bearish-전략-계획)
+6. [ML 예측 전략 (XGBoost, 모든 시장 상태)](#6-ml-예측-전략-xgboost-모든-시장-상태)
+7. [트레일링 스탑](#7-트레일링-스탑)
+8. [타임 컷](#8-타임-컷)
+9. [개장 초 보호 + 지수 하락 매수 차단](#9-개장-초-보호--지수-하락-매수-차단)
+10. [스케줄러 전체 구조](#10-스케줄러-전체-구조)
+11. [설정 방법](#11-설정-방법)
+12. [포지션 사이징](#12-포지션-사이징)
+13. [종목 선정 우선순위 점수화 \[계획\]](#13-종목-선정-우선순위-점수화-계획)
+14. [매수 신호 근접도 (Signal Gap)](#14-매수-신호-근접도-signal-gap)
+15. [하락장(BEARISH) 전략 \[계획\]](#15-하락장bearish-전략-계획)
 
 ---
 
@@ -42,17 +43,18 @@
     ② 코스피 종가 > MA20 → BULLISH (상승장)
        코스피 종가 ≤ MA20 → SIDEWAYS (횡보장)
 
-[09:05~15:19 5분 주기] 전략 실행
+[09:00 첫 실행, 이후 09:05~15:19 5분 주기] 전략 실행
     ↓
-  BULLISH  → 변동성 돌파 + 골든크로스 (동시 실행)
-  SIDEWAYS → RSI + 볼린저밴드 통합 전략
+  BULLISH          → 변동성 돌파 + 골든크로스 + ML 예측 (동시 실행)
+  SIDEWAYS/BEARISH → RSI + 볼린저밴드 + ML 예측
     ↓
 [Phase 1: 전체 종목 평가]
     SELL·트레일링 스탑·타임 컷 → 즉시 처리
     BUY → score 계산 후 buyQueue 수집 (① 시장경보 스킵 ② 보유 중 스킵)
     ↓
 [Phase 1.5: 개장 초 보호 + 지수 하락 체크]
-    현재 시각 < 09:20? → BUY 후보 전체 스킵 (buyQueue.clear())
+    (09:20 이전 BUY 가드 제거됨 — 모든 전략 09:00부터 허용)
+      ML 예측은 EntryQuality 3축 multiplier + 갭업/FOMO 가드로 자체 진입 타이밍 조절
     ↓
     현재 시각 ≥ 09:20 + 당일 첫 체크?
       → 코스피 현재 지수 조회
@@ -67,11 +69,13 @@
     ④ 그룹 슬롯 한도 초과 시 스킵 (GROUP_LIMIT)
        - rsi-bollinger: bollingerMaxPositions 한도
        - volatility-breakout / golden-cross: (maxPositions - bollingerMaxPositions) 한도
+       - ml-prediction: mlDailyLimit 한도 (Admin 설정)
     수량 = floor(investAmountKrw / 현재가), 0주이면 BUDGET_INSUFFICIENT 스킵
     ↓
 [공통 리스크 관리]
-    → 트레일링 스탑: 고점 -7% 하락 시 자동 청산
-    → 타임 컷: RSI+볼린저 매수 후 3거래일 미반등 시 강제 청산
+    → 트레일링 스탑: 고점 -7% 하락 시 자동 청산 (ML 포함)
+    → 타임 컷: RSI+볼린저 매수 후 3거래일 미반등 시 강제 청산 (ML 제외)
+    → ML 청산: TP / SL / maxDays 기준 MlExitService가 5분마다 체크
 ```
 
 ### 전략 등록 방식
@@ -345,7 +349,124 @@ RSI 과매도 깊이 점수  = min((30 - RSI) / 30, 1) × 50                    
 
 ---
 
-## 6. 트레일링 스탑
+## 6. ML 예측 전략 (XGBoost, 모든 시장 상태)
+
+| 항목 | 값 |
+|------|-----|
+| 클래스 | `MLPredictionStrategy` |
+| 전략 이름 | `ml-prediction` |
+| 시장 상태 | BULLISH / SIDEWAYS / BEARISH 모두 실행 |
+| 최소 캔들 | 80개 (28개 피처 계산 최소 요건) |
+| ML 서비스 | `ml-service` (FastAPI, port 8085) |
+
+### 개요
+
+XGBoost 기반 멀티 타겟 모델이 각 종목의 **상승 확률(confidence)**, **기대 수익률(mlScore)**, **예상 보유일수(expectedDays)** 를 예측하고, EntryQuality 3축 multiplier로 진입 타이밍을 조절한다.
+
+```
+ml-service POST /predict
+  ↓
+TradePlanDto (confidence, mlScore, entryPrice, TP, SL, expectedDays, maxDays)
+  ↓
+confidence < mlBuyThreshold (기본 0.75)? → HOLD
+  ↓
+EntryQualityEvaluator (3축 multiplier × 2 강제 가드)
+  → multiplier ≤ 0 → HOLD (갭업/FOMO 가드)
+  ↓
+effectiveScore = mlScore × multiplier
+  ↓
+SignalDto.BUY (score = effectiveScore)
+  ↓
+StrategyEngine buyQueue에 편입 → score 기준 상위 maxPositions개 선택
+```
+
+### 3개 XGBoost 모델
+
+| 모델 | 예측 대상 | 파일 |
+|------|----------|------|
+| cls | 5일 내 목표가 도달 확률 (0~1) | `model_cls.json` |
+| ret | 기대 수익률 (%) | `model_ret.json` |
+| days | 예상 보유 일수 | `model_days.json` |
+
+학습 데이터: 감시 종목 전체 일봉 (`candle-days: 90`), Triple-Barrier 라벨링 적용.  
+모델 저장 위치: K8s PVC `/app/models/` (재시작 시 유지).
+
+### 28개 피처
+
+| 그룹 | 피처 수 | 설명 |
+|------|---------|------|
+| 개별 종목 기술적 지표 | 15 | RSI, MACD, 볼린저, SMA 비율, 거래량 비율, ATR 등 |
+| 시장 Regime (코스피) | 5 | 코스피 MA20 비율, 5일 수익률, ATR, MA60 위/아래, 시장 폭 |
+| 섹터 상대강도 | 3 | 현재 0 placeholder (향후 구현 예정) |
+| 시간/캘린더 | 5 | 요일, 월 내 날짜, 월말 잔여일, 옵션 만기주 여부 등 |
+
+### EntryQuality 3축 Multiplier
+
+| 축 | 기준 | 범위 |
+|----|------|------|
+| shortMult | 직전 5분봉 숏 패턴 강도 | 0.6 ~ 1.0 |
+| sessionMult | 시가 대비 현재가 위치 | 0.6 ~ 1.1 |
+| gapMult | 전일 종가 대비 갭업 크기 | 0.5 ~ 1.0 |
+
+`effectiveScore = mlScore × min(shortMult, sessionMult, gapMult)`
+
+#### 강제 DEFER 가드
+
+| 가드 | 조건 | 적용 시간 |
+|------|------|---------|
+| 갭업 가드 | 전일 종가 대비 +2% 이상 갭업 | 09:15 이전 |
+| FOMO 가드 | 당일 시가 대비 +2% 이상 상승 | 10:30 이전 |
+
+연속 3회 DEFER → 당일 블랙리스트 등록 (`MlDeferTracker`)
+
+### 청산 (MlExitService)
+
+5분 주기로 활성 ML 포지션을 체크해 세 조건 중 먼저 발생한 것으로 시장가 청산:
+
+| 청산 조건 | 기준 |
+|---------|------|
+| **TP (익절)** | 현재가 ≥ takeProfitPrice |
+| **SL (손절)** | 현재가 ≤ stopLossPrice |
+| **maxDays (기간)** | 보유 거래일 ≥ maxDays (기본 7일) |
+
+> TrailingStop(-7%)도 병행 적용 — 이중 보호
+
+### Slack 알림
+
+```
+✅ [ML 예측 매수] 삼성전자 (005930)
+> 확신도: 83%  |  스코어: 74.5
+> 매수가: 78,900원  |  TP: 82,500원  |  SL: 76,200원
+> 예상 보유: 4일 (최대 7일)
+
+💰 [ML 예측 ML TP] 삼성전자 (005930)
+> 수익률: +4.56%  |  3거래일 보유
+> 매수: 78,900원 → 매도: 82,500원
+> TP: 82,500원  |  SL: 76,200원  |  최대: 7일  |  주문: 성공
+
+⛔ [ML 블랙리스트] 삼성전자 (005930)
+> 연속 DEFER 3회 → 당일 추가 평가 제외
+```
+
+### Admin 설정
+
+| 항목 | 키 | 기본값 | 설명 |
+|------|-----|--------|------|
+| ML 일일 한도 | `mlDailyLimit` | 4 (=maxPositions) | 당일 ML 전략 최대 매수 횟수. 0이면 비활성 |
+| ML 확신도 임계값 | `mlBuyThreshold` | 0.75 (75%) | 이 값 미만이면 HOLD |
+| 분봉 미세조정 | `mlEntryTimingEnabled` | true | false 시 multiplier=1.0 고정 |
+
+### 학습 트리거
+
+| 방법 | 설명 |
+|------|------|
+| 서비스 시작 시 자동 | 최초 기동 시 즉시 학습 시도 |
+| 수동 | `POST http://ml-service:8085/train` |
+| 모델 상태 확인 | `GET http://ml-service:8085/model/status` |
+
+---
+
+## 7. 트레일링 스탑
 
 | 항목 | 값 |
 |------|-----|
@@ -392,7 +513,7 @@ GET /api/strategy/admin/trailing-stop-status
 
 ---
 
-## 7. 타임 컷
+## 8. 타임 컷
 
 | 항목 | 값 |
 |------|-----|
@@ -449,29 +570,27 @@ GET /api/strategy/admin/time-cut-status
 
 ---
 
-## 8. 개장 초 보호 + 지수 하락 매수 차단
+## 9. 개장 초 보호 + 지수 하락 매수 차단
 
 ### 목표
 
-- 개장 초(09:05~09:19) 고변동성 구간 신규 매수 방지
 - 코스피 급락 당일 추가 손실 방지
+- 개장 초 BUY 가드는 ML 도입 시 제거됨 (모든 전략 09:00부터 허용)
 
 ### 동작 방식
 
 ```
-StrategyEngine.run() (09:05~15:19 매 5분)
+StrategyEngine.run() (09:00 첫 실행, 이후 매 5분)
   ↓
 Phase 1.5 — BUY 가드
-
-현재 시각 < 09:20 → buyQueue.clear() (BUY 스킵)
   ↓
-현재 시각 ≥ 09:20 + 당일 미체크 →
+당일 첫 실행 시 →
   코스피 지수 현재가 조회 (getIndexCandles, 2개)
   하락률 = (yesterdayClose - currentIndex) / yesterdayClose × 100
   하락률 ≥ indexDropBlockPct% → indexDropBlockedToday = true
   ↓
 indexDropBlockedToday == true AND indexDropBlockPct > 0 →
-  buyQueue.clear() (당일 BUY 전체 스킵)
+  당일 BUY 전체 스킵 (indexBlocked flag)
   ↓
 정상 BUY 진행
 ```
@@ -494,14 +613,15 @@ Admin UI → "지수 하락 매수차단 (%)" → `0` 입력 → 설정 저장
 
 ---
 
-## 9. 스케줄러 전체 구조
+## 10. 스케줄러 전체 구조
 
 | Cron | 클래스 | 역할 | Slack 알림 |
 |------|--------|------|-----------|
 | `0 20 8 * * MON-FRI` | `StockScreenerService` (market-service) | stock-universe.json 로드 → 코스피200+코스닥150 목록 캐싱 | — |
 | `0 30 8 * * MON-FRI` | `MarketStateScheduler` (strategy-service) | ① 감시 종목 목록 갱신(watchTickers) ② 코스피 MA20 → 시장 상태 판별 | 📋 감시종목 수 + 시장 상태 |
 | `0 5 9 * * MON-FRI` | `ForceExitScheduler` | 오버나이트 미청산 포지션 익일 장 시작 직후 청산 (전략 검증 포함) | 🔔 종목별 매수가·매도 주문가 포함 / 대상 없으면 "대상 없음" |
-| `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 | — (15:25 일일 요약으로 취합) |
+| `0 0 9 * * MON-FRI` | `StrategyScheduler` | 09:00 첫 실행 (ML 예측 전용 — 규칙 기반 전략은 09:20 이후에만 BUY) | — |
+| `0 5/5 9-15 * * MON-FRI` | `StrategyScheduler` | 전략 실행 + 트레일링 스탑 + 타임 컷 + ML TP/SL/maxDays 청산 체크 | — (15:25 일일 요약으로 취합) |
 | `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:19) | — (발동 시만 🛑 알림) |
 | `0 0 10-15 * * MON-FRI` | `StrategyScheduler` | 직전 1시간 실행 요약 Slack 발송 | 🕐 시간별 요약 |
 | `0 22 15 * * MON-FRI` | `StrategyScheduler` | 15시대 실행 요약 Slack 발송 | 🕐 시간별 요약 (15시) |
@@ -550,7 +670,10 @@ Admin UI → "지수 하락 매수차단 (%)" → `0` 입력 → 설정 저장
 
 ### StrategyScheduler 상세
 
-`0 5/5 9-15 * * MON-FRI` cron은 09:05, 09:10 ... 15:55까지 실행을 시도합니다. 코드로 15:19 이후를 추가 차단합니다:
+두 개의 cron 설정이 적용됩니다:
+
+- `0 0 9 * * MON-FRI` — 09:00 단 1회 실행 (ML 예측 전략 전용 진입 타이밍)
+- `0 5/5 9-15 * * MON-FRI` — 09:05, 09:10 ... 15:55까지 5분 주기. 코드로 15:19 이후 추가 차단:
 
 ```java
 if (hour == 15 && minute > 19) return;
@@ -559,7 +682,7 @@ if (hour == 15 && minute > 19) return;
 
 ---
 
-## 10. 설정 방법
+## 11. 설정 방법
 
 ### 런타임 관리자 설정 (AdminConfigStore)
 
@@ -736,7 +859,7 @@ strategy:
 
 ---
 
-## 11. 포지션 사이징
+## 12. 포지션 사이징
 
 ### 개요
 
@@ -828,7 +951,7 @@ if (effective >= maxPositions) skip;  // 실시간 카운터로 초과 방지
 
 ---
 
-## 12. 종목 선정 우선순위 점수화
+## 13. 종목 선정 우선순위 점수화
 
 ### 개요
 
@@ -891,7 +1014,7 @@ Phase 2 — BUY 실행:
 
 ---
 
-## 13. 매수 신호 근접도 (Signal Gap)
+## 14. 매수 신호 근접도 (Signal Gap)
 
 ### 개요
 
@@ -1000,7 +1123,7 @@ Strategy 페이지 "매수 신호 근접도" 섹션:
 
 ---
 
-## 14. 하락장(BEARISH) 전략 [계획]
+## 15. 하락장(BEARISH) 전략 [계획]
 
 ### 현재 문제
 

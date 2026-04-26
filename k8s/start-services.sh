@@ -15,7 +15,10 @@ kubectl scale statefulset/kafka -n axiom --replicas=1
 echo "Kafka ready 대기 중..."
 kubectl wait --for=condition=ready pod -l app=kafka -n axiom --timeout=120s
 
-echo "=== [3/3] 백엔드 및 프론트엔드 서비스 기동 ==="
-kubectl scale deployment/market-service deployment/order-service deployment/portfolio-service deployment/strategy-service deployment/api-gateway deployment/frontend -n axiom --replicas=1
+echo "=== [3/3] 백엔드, 프론트엔드, ML, Cloudflare 기동 ==="
+kubectl scale deployment/market-service deployment/order-service deployment/portfolio-service \
+  deployment/strategy-service deployment/api-gateway deployment/frontend \
+  deployment/ml-service deployment/cloudflared \
+  -n axiom --replicas=1
 
 echo "모든 서비스가 순서대로 기동되었습니다."

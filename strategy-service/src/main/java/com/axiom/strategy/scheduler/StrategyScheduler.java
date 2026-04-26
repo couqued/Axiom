@@ -1,6 +1,8 @@
 package com.axiom.strategy.scheduler;
 
+import com.axiom.strategy.client.MlClient;
 import com.axiom.strategy.engine.StrategyEngine;
+import com.axiom.strategy.ml.MlPerformanceService;
 import com.axiom.strategy.notification.SlackNotifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,14 +30,18 @@ public class StrategyScheduler {
     private final StrategyEngine strategyEngine;
     private final DailySummaryCollector dailySummaryCollector;
     private final SlackNotifier slackNotifier;
+    private final MlClient mlClient;
+    private final MlPerformanceService mlPerformanceService;
 
     /** 동시 실행 방지 플래그 — 이전 run()이 끝나기 전에 새 트리거가 오면 스킵 */
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     /**
-     * 평일 09:05 ~ 15:20 사이 5분마다 실행.
-     * (09:00 장 시작 직후 5분 대기, 15:25 이후는 실행 안 함)
+     * 평일 09:00 첫 실행 후 09:05 ~ 15:20 사이 5분마다 실행.
+     * 09:00 ~ 09:04 동시호가 직후 구간은 ML EntryQuality 의 3축 multiplier +
+     * 갭업/FOMO 가드가 시초가 급변을 흡수한다.
      */
+    @Scheduled(cron = "0 0 9 * * MON-FRI", zone = "Asia/Seoul")
     @Scheduled(cron = "0 5/5 9-15 * * MON-FRI", zone = "Asia/Seoul")
     public void runStrategies() {
         if (!TradingCalendar.isTradingDay(LocalDate.now(TradingCalendar.KST))) {
@@ -67,6 +73,20 @@ public class StrategyScheduler {
             dailySummaryCollector.record(result);
         } finally {
             running.set(false);
+        }
+    }
+
+    /** 매일 17:00 — 학습 완료 후 새 모델 스냅샷이 있으면 DB 저장 */
+    @Scheduled(cron = "0 0 17 * * *", zone = "Asia/Seoul")
+    public void checkModelSnapshot() {
+        try {
+            MlClient.ModelStatusDto status = mlClient.getModelStatus();
+            if (status == null || status.trainedAt() == null) return;
+            mlPerformanceService.saveSnapshotIfNew(
+                    status.trainedAt(), status.samples(),
+                    status.valAuc(), status.valMaeRet(), status.valMaeDays());
+        } catch (Exception e) {
+            log.warn("[Scheduler] 모델 스냅샷 체크 실패: {}", e.getMessage());
         }
     }
 
