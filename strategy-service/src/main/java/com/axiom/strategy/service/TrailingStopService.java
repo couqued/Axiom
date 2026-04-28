@@ -156,10 +156,12 @@ public class TrailingStopService {
                 .filter(p -> p.getTicker().equals(ticker))
                 .findFirst()
                 .map(position -> {
+                    String strategyName = stateStore.loadAllEntryTags().get(ticker);
                     OrderRequest sellOrder = OrderRequest.builder()
                             .ticker(ticker)
                             .quantity(position.getQuantity())
                             .price(currentPrice)
+                            .strategyName(strategyName)
                             .closeReason("TRAILING_STOP")
                             .build();
                     OrderResult result = orderClient.sellWithRetry(sellOrder);

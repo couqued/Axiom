@@ -79,6 +79,12 @@ public class MlDeferTracker {
         deferred.remove(ticker);
     }
 
+    /** 전체 DEFER/블랙리스트 초기화. */
+    public void clearAll() {
+        deferred.clear();
+        log.info("[MlDefer] 전체 초기화 완료");
+    }
+
     public int getCount(String ticker) {
         DeferState s = deferred.get(ticker);
         if (s == null || !s.date().equals(LocalDate.now(TradingCalendar.KST))) return 0;

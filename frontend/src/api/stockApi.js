@@ -144,6 +144,9 @@ export const markSold = (tickers) =>
 export const mlDryRun = () =>
   request('/api/strategy/admin/ml/dry-run')
 
+export const mlRetrain = () =>
+  request('/api/strategy/admin/ml/retrain', { method: 'POST' })
+
 // ML 성과 — 모델 정보 + 승률 요약
 export const getMlPerformanceSummary = () =>
   request('/api/strategy/ml-performance/summary')
@@ -151,3 +154,7 @@ export const getMlPerformanceSummary = () =>
 // ML 성과 — 거래 이력 (페이지네이션)
 export const getMlTradeHistory = (page = 0, size = 20) =>
   request(`/api/strategy/ml-performance/trades?page=${page}&size=${size}`)
+
+// ML 성과 — 확신도 구간별 통계
+export const getMlConfidenceTiers = () =>
+  request('/api/strategy/ml-performance/confidence-tiers')

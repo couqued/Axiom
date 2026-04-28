@@ -52,6 +52,7 @@ export default function Dashboard() {
     const style = { color: '#4caf50', border: '1px solid #1b5e20' }
     if (entryTag === 'volatility-breakout') return { ...style, label: '변동성돌파' }
     if (entryTag === 'golden-cross')        return { ...style, label: '골든크로스' }
+    if (entryTag === 'ml-prediction')       return { ...style, label: 'ML 예측' }
     if (stage === 1)                        return { ...style, label: 'BB 1차 매수' }
     return { ...style, label: 'BB+RSI 완료' }
   }
@@ -147,6 +148,32 @@ export default function Dashboard() {
                     )}
                   </span>
                 </div>
+
+                {item.entryTag === 'ml-prediction' && item.mlConfidence != null && (
+                  <div className="holding-row" style={{ fontSize: '11px', color: '#aaa', marginTop: '2px' }}>
+                    confidence {(item.mlConfidence * 100).toFixed(1)}%
+                    {item.mlTakeProfitPrice != null && (
+                      <span style={{ color: '#81c784' }}> · TP {Math.round(Number(item.mlTakeProfitPrice)).toLocaleString()}원</span>
+                    )}
+                    {item.mlStopLossPrice != null && (
+                      <span style={{ color: '#e57373' }}> · SL {Math.round(Number(item.mlStopLossPrice)).toLocaleString()}원</span>
+                    )}
+                    {item.mlExpectedDays != null && (
+                      <span>
+                        {' · '}예상{item.mlExpectedDays}일
+                        {item.mlRemainingDays != null && (
+                          <span style={{
+                            color: item.mlRemainingDays <= 1 ? '#ff9800' : '#aaa'
+                          }}>
+                            {item.mlRemainingDays === 0
+                              ? ' (오늘 재평가)'
+                              : ` (${item.mlRemainingDays}일 남음)`}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className={`holding-pnl ${pnl >= 0 ? 'up' : 'down'}`}>
                   <span>평가손익 {pnl >= 0 ? '+' : ''}{Math.round(pnl).toLocaleString()}원</span>

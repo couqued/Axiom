@@ -87,16 +87,19 @@ public class MlClient {
      * 재학습 트리거 (비동기 — ml-service 측에서 백그라운드 처리).
      */
     public void triggerRetrain() {
-        try {
-            mlWebClient.post()
-                    .uri("/train")
-                    .retrieve()
-                    .bodyToMono(Void.class)
-                    .block();
-            log.info("[MlClient] /train 트리거 완료");
-        } catch (Exception e) {
-            log.warn("[MlClient] /train 트리거 실패: {}", e.getMessage());
-        }
+        startTrainAsync()
+                .doOnSuccess(v -> log.info("[MlClient] /train 완료"))
+                .doOnError(e -> log.warn("[MlClient] /train 실패: {}", e.getMessage()))
+                .subscribe();
+        log.info("[MlClient] /train 트리거 — 백그라운드 학습 시작");
+    }
+
+    /** 재학습 Mono — 완료 후 콜백 체이닝용 */
+    public reactor.core.publisher.Mono<Void> startTrainAsync() {
+        return mlWebClient.post()
+                .uri("/train")
+                .retrieve()
+                .bodyToMono(Void.class);
     }
 
     /**
@@ -111,7 +114,13 @@ public class MlClient {
                     .block();
             if (resp == null || resp.meta == null) return null;
             ModelStatusResponse.Meta m = resp.meta;
-            return new ModelStatusDto(m.trained_at, m.samples, m.val_auc, m.val_mae_ret, m.val_mae_days);
+            Map<String, String> freshness = new HashMap<>();
+            if (resp.global_data_freshness != null) {
+                resp.global_data_freshness.forEach((k, v) -> {
+                    if (v != null && !k.equals("last_fetch_ts")) freshness.put(k, v.toString());
+                });
+            }
+            return new ModelStatusDto(m.trained_at, m.samples, m.val_auc, m.val_mae_ret, m.val_mae_days, freshness);
         } catch (Exception e) {
             log.warn("[MlClient] getModelStatus 실패: {}", e.getMessage());
             return null;
@@ -119,18 +128,20 @@ public class MlClient {
     }
 
     public record ModelStatusDto(
-            String  trainedAt,
-            Integer samples,
-            Double  valAuc,
-            Double  valMaeRet,
-            Double  valMaeDays
+            String              trainedAt,
+            Integer             samples,
+            Double              valAuc,
+            Double              valMaeRet,
+            Double              valMaeDays,
+            Map<String, String> globalDataFreshness
     ) {}
 
     // ── 응답 바디 모델 ─────────────────────────────────────────────────────────
 
     static class ModelStatusResponse {
-        public boolean ready;
-        public Meta meta;
+        public boolean           ready;
+        public Meta              meta;
+        public Map<String, Object> global_data_freshness;
         static class Meta {
             public String  trained_at;
             public Integer samples;
@@ -155,6 +166,7 @@ public class MlClient {
         public Integer expectedDays;
         public Integer maxDays;
         public String reason;
+        public Map<String, Double> features;
 
         TradePlanDto toDto() {
             double score = (mlScore != null) ? mlScore : confidence * 100.0;
@@ -169,7 +181,8 @@ public class MlClient {
                     stopLossPrice,
                     exp,
                     mx,
-                    reason != null ? reason : String.format("ML conf=%.0f%%", confidence * 100)
+                    reason != null ? reason : String.format("ML conf=%.0f%%", confidence * 100),
+                    features
             );
         }
     }

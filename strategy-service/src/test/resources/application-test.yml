@@ -9,9 +9,7 @@ spring:
       ddl-auto: create-drop
     database-platform: org.hibernate.dialect.H2Dialect
 
-strategy:
-  watch-tickers:
-    - "005930"
+strategy: {}
 
 slack:
   webhook-url: PLACEHOLDER

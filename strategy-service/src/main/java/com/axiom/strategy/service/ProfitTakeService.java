@@ -83,10 +83,12 @@ public class ProfitTakeService {
 
     private void executeSell(String ticker, BigDecimal currentPrice,
                              PortfolioItemDto position, double pct) {
+        String strategyName = stateStore.loadAllEntryTags().get(ticker);
         OrderRequest sellOrder = OrderRequest.builder()
                 .ticker(ticker)
                 .quantity(position.getQuantity())
                 .price(currentPrice)
+                .strategyName(strategyName)
                 .closeReason("PROFIT_TAKE")
                 .build();
         OrderResult result = orderClient.sellWithRetry(sellOrder);

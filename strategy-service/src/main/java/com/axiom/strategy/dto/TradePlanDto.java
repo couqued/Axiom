@@ -1,6 +1,7 @@
 package com.axiom.strategy.dto;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 /**
  * ML 예측 전략의 단일 종목 매매 계획.
@@ -11,14 +12,15 @@ import java.math.BigDecimal;
  */
 public record TradePlanDto(
         String ticker,
-        double confidence,          // 상승 확률 (0~1)
-        double mlScore,             // confidence × 100
-        BigDecimal entryPrice,      // 모델 평가 시점의 현재가
-        BigDecimal takeProfitPrice, // 목표가
-        BigDecimal stopLossPrice,   // 손절가
-        int expectedDays,           // 예상 보유 거래일
-        int maxDays,                // 최대 보유 상한 (하드 가드)
-        String reason               // 로그/Slack 표시용
+        double confidence,              // 상승 확률 (0~1)
+        double mlScore,                 // confidence × 100
+        BigDecimal entryPrice,          // 모델 평가 시점의 현재가
+        BigDecimal takeProfitPrice,     // 목표가
+        BigDecimal stopLossPrice,       // 손절가
+        int expectedDays,               // 예상 보유 거래일
+        int maxDays,                    // 최대 보유 상한 (하드 가드)
+        String reason,                  // 로그/Slack 표시용
+        Map<String, Double> features    // 예측 시점의 36개 피처값 (nullable)
 ) {
     public boolean isBuy() { return confidence > 0.0 && entryPrice != null; }
 }

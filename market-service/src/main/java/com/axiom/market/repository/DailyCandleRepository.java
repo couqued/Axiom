@@ -2,6 +2,7 @@ package com.axiom.market.repository;
 
 import com.axiom.market.entity.DailyCandle;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -15,4 +16,7 @@ public interface DailyCandleRepository extends JpaRepository<DailyCandle, Long> 
     Optional<DailyCandle> findByTickerAndTradeDate(String ticker, LocalDate tradeDate);
 
     Optional<DailyCandle> findTopByTickerOrderByTradeDateDesc(String ticker);
+
+    @Query("SELECT MAX(c.tradeDate) FROM DailyCandle c")
+    Optional<LocalDate> findLatestTradeDate();
 }

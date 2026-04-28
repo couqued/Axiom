@@ -159,10 +159,12 @@ public class TimeCutService {
                 .filter(p -> p.getTicker().equals(ticker))
                 .findFirst()
                 .map(position -> {
+                    String strategyName = stateStore.loadAllEntryTags().get(ticker);
                     OrderRequest sellOrder = OrderRequest.builder()
                             .ticker(ticker)
                             .quantity(position.getQuantity())
                             .price(currentPrice)
+                            .strategyName(strategyName)
                             .closeReason("TIME_CUT")
                             .build();
                     OrderResult result = orderClient.sellWithRetry(sellOrder);

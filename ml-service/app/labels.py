@@ -59,7 +59,5 @@ def label_triple_barrier(df: pd.DataFrame, at_idx: int, atr14_pct_at_t: float):
         if hit_sl:
             return 0, k, -sl_pct, True
 
-    # HORIZON 경과 — TIME barrier
-    final = float(df["close"].iloc[at_idx + horizon])
-    ret = final / entry - 1
-    return 0, horizon, float(ret), True
+    # HORIZON 경과 — TIME barrier: 방향성 불명확하므로 학습에서 제외
+    return None, None, None, False

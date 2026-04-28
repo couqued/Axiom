@@ -12,6 +12,7 @@ const STRATEGY_TAG_STYLE = { color: '#4caf50', border: '1px solid #1b5e20' }
 function getPositionStrategyTag(entryTag, buyStage) {
   if (entryTag === 'volatility-breakout') return { ...STRATEGY_TAG_STYLE, label: '변동성돌파' }
   if (entryTag === 'golden-cross')        return { ...STRATEGY_TAG_STYLE, label: '골든크로스' }
+  if (entryTag === 'ml-prediction')       return { ...STRATEGY_TAG_STYLE, label: 'ML 예측' }
   if (buyStage === 1)                     return { ...STRATEGY_TAG_STYLE, label: 'BB 1차 매수' }
   return { ...STRATEGY_TAG_STYLE, label: 'BB+RSI 완료' }
 }

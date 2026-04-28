@@ -2,8 +2,11 @@ package com.axiom.strategy.service;
 
 import com.axiom.strategy.admin.AdminConfigStore;
 import com.axiom.strategy.client.MarketClient;
+import com.axiom.strategy.client.MlClient;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
+import com.axiom.strategy.config.StrategyConfig;
+import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
@@ -25,9 +28,15 @@ import java.util.Optional;
 /**
  * ML 전략 포지션 전용 청산 서비스.
  *
- * <p>StrategyEngine 5분 사이클마다 {@link #check()} 호출.
- * 활성 ML 포지션에 대해 TP / SL / maxDays 세 가지 기준을 체크해
- * 먼저 발생한 조건으로 시장가 매도.
+ * <p>StrategyEngine 5분 사이클마다 {@link #check(List)} 호출.
+ * 활성 ML 포지션에 대해 TP / SL / maxDays / expectedDays 재평가 순으로 체크.
+ *
+ * <ul>
+ *   <li>TP / SL — 가격 조건 충족 시 즉시 청산</li>
+ *   <li>maxDays — 절대 최대 보유 기간 초과 시 즉시 청산 (모델 훈련 범위 이탈)</li>
+ *   <li>expectedDays — 모델 예측 보유일 경과 시 ML 재추론:
+ *       confidence ≥ threshold 면 maxDays까지 연장, 미달 시 청산</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -38,6 +47,9 @@ public class MlExitService {
     private final MlPositionStore planStore;
     private final PortfolioClient portfolioClient;
     private final MarketClient marketClient;
+    private final MlClient mlClient;
+    private final MarketStateService marketStateService;
+    private final StrategyConfig strategyConfig;
     private final OrderClient orderClient;
     private final SlackNotifier slackNotifier;
     private final DailySellBlockService dailySellBlockService;
@@ -83,11 +95,69 @@ public class MlExitService {
                 exitTag = "ML SL";
             } else if (elapsed >= plan.maxDays()) {
                 exitTag = "ML 최대보유";
+            } else if (elapsed >= plan.expectedDays()) {
+                reevaluate(ticker, current, position, ap, elapsed);
+                continue;
             }
 
             if (exitTag != null) {
                 exit(ticker, exitTag, current, position, ap, elapsed);
             }
+        }
+    }
+
+    private void reevaluate(String ticker, BigDecimal current,
+                             PortfolioItemDto position, MlPositionStore.ActivePlan ap, int elapsed) {
+        log.info("[MlExit] 재평가 시작 — ticker: {}, elapsed: {}일, expectedDays: {}",
+                ticker, elapsed, ap.plan().expectedDays());
+
+        List<CandleDto> candles = marketClient.getCandles(ticker, strategyConfig.getCandleDays());
+        List<CandleDto> indexCandles = marketStateService.getKospiCandlesCached();
+        double marketBreadth = marketStateService.getMarketBreadth();
+
+        if (candles == null || candles.isEmpty()) {
+            log.warn("[MlExit] 재평가 캔들 없음 — 보수적 청산 ticker: {}", ticker);
+            exit(ticker, "ML 재평가 매도", current, position, ap, elapsed);
+            return;
+        }
+
+        TradePlanDto newPlan = mlClient.predict(ticker, candles, indexCandles, marketBreadth);
+
+        if (newPlan == null) {
+            log.warn("[MlExit] 재평가 ML 응답 없음 — 보수적 청산 ticker: {}", ticker);
+            exit(ticker, "ML 재평가 매도", current, position, ap, elapsed);
+            return;
+        }
+
+        double threshold = adminConfigStore.getMlBuyThreshold();
+
+        if (newPlan.confidence() >= threshold) {
+            // expectedDays = maxDays 센티넬 → 같은 포지션에 재평가 1회만 발동
+            TradePlanDto extendedPlan = new TradePlanDto(
+                    newPlan.ticker(), newPlan.confidence(), newPlan.mlScore(),
+                    ap.actualEntryPrice(),
+                    newPlan.takeProfitPrice(),
+                    newPlan.stopLossPrice(),
+                    ap.plan().maxDays(),
+                    ap.plan().maxDays(),
+                    newPlan.reason(),
+                    ap.plan().features()  // 기존 포지션 피처 유지 (재평가분은 새로 저장 안 함)
+            );
+            planStore.activateDirect(ticker, extendedPlan, ap.entryDate(), ap.actualEntryPrice());
+            slackNotifier.sendMlReEval(ticker, position.getStockName(),
+                    ap.actualEntryPrice(), current,
+                    newPlan.confidence(), threshold,
+                    newPlan.takeProfitPrice(), newPlan.stopLossPrice(),
+                    elapsed, ap.plan().maxDays(), true);
+            log.info("[MlExit] 재평가 — 연장 결정 ticker: {}, conf={}%",
+                    ticker, String.format("%.1f", newPlan.confidence() * 100));
+        } else {
+            slackNotifier.sendMlReEval(ticker, position.getStockName(),
+                    ap.actualEntryPrice(), current,
+                    newPlan.confidence(), threshold,
+                    newPlan.takeProfitPrice(), newPlan.stopLossPrice(),
+                    elapsed, ap.plan().maxDays(), false);
+            exit(ticker, "ML 재평가 매도", current, position, ap, elapsed);
         }
     }
 
@@ -99,7 +169,7 @@ public class MlExitService {
                 .quantity(position.getQuantity())
                 .price(null) // 시장가
                 .strategyName("ml-prediction")
-                .closeReason("ML_" + tag.replace(" ", "_"))
+                .closeReason("ML_" + tag.replace("ML ", "").trim().replace(" ", "_"))
                 .build();
 
         OrderResult result = orderClient.sellWithRetry(req);

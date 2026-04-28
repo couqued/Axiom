@@ -85,6 +85,7 @@ public class ForceExitScheduler {
                     .ticker(position.getTicker())
                     .quantity(position.getQuantity())
                     .price(null)  // 시장가 매도 (price=null → OrderService → KIS ORD_DVSN=01)
+                    .strategyName("volatility-breakout")
                     .closeReason("FORCE_EXIT")
                     .build();
 
@@ -189,6 +190,7 @@ public class ForceExitScheduler {
                     .ticker(position.getTicker())
                     .quantity(position.getQuantity())
                     .price(null)  // 시장가 매도 (price=null → OrderService → KIS ORD_DVSN=01)
+                    .strategyName("volatility-breakout")
                     .closeReason("FORCE_EXIT")
                     .build();
 

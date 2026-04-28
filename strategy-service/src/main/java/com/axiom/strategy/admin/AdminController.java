@@ -1,7 +1,14 @@
 package com.axiom.strategy.admin;
 
+import com.axiom.strategy.client.MarketClient;
+import com.axiom.strategy.client.MlClient;
 import com.axiom.strategy.client.OrderClient;
 import com.axiom.strategy.client.PortfolioClient;
+import com.axiom.strategy.dto.CandleDto;
+import com.axiom.strategy.dto.TradePlanDto;
+import com.axiom.strategy.ml.MlPerformanceService;
+import com.axiom.strategy.service.MlDeferTracker;
+import com.axiom.strategy.service.MlPositionStore;
 import com.axiom.strategy.dto.OrderRequest;
 import com.axiom.strategy.dto.OrderResult;
 import com.axiom.strategy.dto.PortfolioItemDto;
@@ -13,12 +20,16 @@ import com.axiom.strategy.service.MarketStateService;
 import com.axiom.strategy.service.TimeCutService;
 import com.axiom.strategy.service.TrailingStopService;
 import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
+
+import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/strategy/admin")
 @RequiredArgsConstructor
@@ -35,6 +46,11 @@ public class AdminController {
     private final BollingerReserveService bollingerReserveService;
     private final StrategyStateStore strategyStateStore;
     private final StrategyEngine strategyEngine;
+    private final MlClient mlClient;
+    private final MlPerformanceService mlPerformanceService;
+    private final MlDeferTracker mlDeferTracker;
+    private final MlPositionStore mlPositionStore;
+    private final MarketClient marketClient;
 
     /** 현재 관리자 설정 상태 조회 */
     @GetMapping("/status")
@@ -136,10 +152,73 @@ public class AdminController {
         return ResponseEntity.ok(currentStatus());
     }
 
+    /** ML 보유 포지션 플랜 복구 — mlPositionStore에 데이터 없는 ml-prediction 포지션을 재예측해 저장 */
+    @PostMapping("/ml/recover-positions")
+    public ResponseEntity<Map<String, String>> recoverMlPositions() {
+        Map<String, String> result = new LinkedHashMap<>();
+        Map<String, String> tags = strategyStateStore.loadAllEntryTags();
+        List<PortfolioItemDto> positions = portfolioClient.getPositions();
+        List<CandleDto> indexCandles = marketStateService.getKospiCandlesCached();
+
+        for (PortfolioItemDto pos : positions) {
+            String ticker = pos.getTicker();
+            if (!"ml-prediction".equals(tags.get(ticker))) continue;
+            if (mlPositionStore.isActive(ticker)) {
+                result.put(ticker, "SKIP (이미 있음)");
+                continue;
+            }
+            try {
+                List<CandleDto> candles = marketClient.getCandles(ticker, 60);
+                TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, 0.5);
+                if (plan == null || !plan.isBuy()) {
+                    result.put(ticker, "SKIP (ML HOLD 또는 실패)");
+                    continue;
+                }
+                mlPositionStore.activateDirect(ticker, plan, LocalDate.now(), pos.getAvgPrice());
+                result.put(ticker, String.format("OK — conf=%.1f%%, TP=%s, SL=%s",
+                        plan.confidence() * 100, plan.takeProfitPrice(), plan.stopLossPrice()));
+            } catch (Exception e) {
+                result.put(ticker, "ERROR: " + e.getMessage());
+            }
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    /** ML DEFER/블랙리스트 전체 초기화 */
+    @PostMapping("/ml/defer/clear")
+    public ResponseEntity<Map<String, String>> clearMlDefer() {
+        mlDeferTracker.clearAll();
+        return ResponseEntity.ok(Map.of("status", "ML DEFER 초기화 완료"));
+    }
+
     /** ML 예측 드라이런 — 실제 주문 없이 watch-tickers 전체 예측 결과 조회 (확신도 순) */
     @GetMapping("/ml/dry-run")
     public ResponseEntity<java.util.List<StrategyEngine.MlDryRunResult>> mlDryRun() {
         return ResponseEntity.ok(strategyEngine.runMlDryRun());
+    }
+
+    /** ML 재학습 트리거 — 완료 후 DB 스냅샷 즉시 저장 */
+    @PostMapping("/ml/retrain")
+    public ResponseEntity<Map<String, String>> mlRetrain() {
+        mlClient.startTrainAsync()
+                .doOnSuccess(v -> {
+                    log.info("[Admin] /train 완료 — 스냅샷 저장 시도");
+                    try {
+                        MlClient.ModelStatusDto status = mlClient.getModelStatus();
+                        if (status != null && status.trainedAt() != null) {
+                            mlPerformanceService.saveSnapshotIfNew(
+                                    status.trainedAt(), status.samples(),
+                                    status.valAuc(), status.valMaeRet(), status.valMaeDays());
+                            log.info("[Admin] 스냅샷 저장 완료 — trainedAt: {}", status.trainedAt());
+                        }
+                    } catch (Exception e) {
+                        log.warn("[Admin] 스냅샷 저장 실패: {}", e.getMessage());
+                    }
+                })
+                .doOnError(e -> log.warn("[Admin] /train 실패: {}", e.getMessage()))
+                .subscribe();
+        log.info("[Admin] ML 재학습 트리거 — 백그라운드 시작");
+        return ResponseEntity.ok(Map.of("status", "학습 시작됨. 완료까지 수분 소요됩니다."));
     }
 
     /** 트레일링 스탑 현황 조회 — ticker별 고점/기준가 */
@@ -205,10 +284,12 @@ public class AdminController {
 
         for (PortfolioItemDto position : positions) {
             if (!targets.contains(position.getTicker())) continue;
+            String strategyName = strategyStateStore.loadAllEntryTags().get(position.getTicker());
             OrderRequest sellOrder = OrderRequest.builder()
                     .ticker(position.getTicker())
                     .quantity(position.getQuantity())
                     .price(null)
+                    .strategyName(strategyName)
                     .closeReason("MANUAL_EXIT")
                     .build();
             OrderResult orderResult = orderClient.sellWithRetry(sellOrder);

@@ -1,10 +1,11 @@
 package com.axiom.strategy.service;
 
 import com.axiom.strategy.dto.TradePlanDto;
+import com.axiom.strategy.ml.MlPredictionFeature;
+import com.axiom.strategy.ml.MlPredictionFeatureRepository;
 import com.axiom.strategy.persistence.StrategyState;
 import com.axiom.strategy.persistence.StrategyStateRepository;
 import com.axiom.strategy.util.TradingCalendar;
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -40,9 +41,9 @@ public class MlPositionStore {
     private static final String ML_PLAN = "ML_PLAN";
     private static final long STAGE_TTL_MS = 10 * 60 * 1000L;
 
-    private final StrategyStateRepository repo;
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+    private final StrategyStateRepository         repo;
+    private final MlPredictionFeatureRepository   predictionFeatureRepo;
+    private final ObjectMapper objectMapper;
 
     private final Map<String, StagedPlan> staged = new ConcurrentHashMap<>();
     private final Map<String, ActivePlan> active = new ConcurrentHashMap<>();
@@ -113,10 +114,35 @@ public class MlPositionStore {
             log.warn("[MlPositionStore] ML_PLAN 직렬화 실패 - ticker: {}, error: {}",
                     ticker, e.getMessage());
         }
+        // 예측 시점의 피처 벡터 저장 (features가 있는 경우만)
+        Map<String, Double> features = sp.plan().features();
+        if (features != null && !features.isEmpty()) {
+            try {
+                String featJson = objectMapper.writeValueAsString(features);
+                predictionFeatureRepo.save(
+                        new MlPredictionFeature(ticker, LocalDateTime.now(), sp.plan().confidence(), featJson));
+            } catch (Exception e) {
+                log.warn("[MlPositionStore] 피처 벡터 저장 실패 - ticker: {}, error: {}", ticker, e.getMessage());
+            }
+        }
     }
 
     public Optional<ActivePlan> getActive(String ticker) {
         return Optional.ofNullable(active.get(ticker));
+    }
+
+    /** staged 없이 직접 플랜 등록 — 기존 포지션 복구용. */
+    @Transactional
+    public void activateDirect(String ticker, TradePlanDto plan, LocalDate entryDate, BigDecimal actualEntryPrice) {
+        ActivePlan ap = new ActivePlan(plan, entryDate, actualEntryPrice);
+        active.put(ticker, ap);
+        try {
+            String json = objectMapper.writeValueAsString(ActivePlanRecord.from(ap));
+            upsert(ticker, json);
+            log.info("[MlPositionStore] activateDirect — ticker: {}, saved to DB", ticker);
+        } catch (JsonProcessingException e) {
+            log.warn("[MlPositionStore] activateDirect 직렬화 실패 - ticker: {}, error: {}", ticker, e.getMessage());
+        }
     }
 
     public Set<Map.Entry<String, ActivePlan>> activeEntries() {
@@ -155,19 +181,20 @@ public class MlPositionStore {
             int maxDays,
             String reason,
             LocalDate entryDate,
-            BigDecimal actualEntryPrice
+            BigDecimal actualEntryPrice,
+            Map<String, Double> features  // nullable — ml_prediction_features 연결용
     ) {
         static ActivePlanRecord from(ActivePlan ap) {
             TradePlanDto p = ap.plan();
             return new ActivePlanRecord(p.ticker(), p.confidence(), p.mlScore(),
                     p.entryPrice(), p.takeProfitPrice(), p.stopLossPrice(),
                     p.expectedDays(), p.maxDays(), p.reason(),
-                    ap.entryDate(), ap.actualEntryPrice());
+                    ap.entryDate(), ap.actualEntryPrice(), p.features());
         }
         ActivePlan toActivePlan() {
             TradePlanDto p = new TradePlanDto(ticker, confidence, mlScore,
                     entryPrice, takeProfitPrice, stopLossPrice,
-                    expectedDays, maxDays, reason);
+                    expectedDays, maxDays, reason, features);
             return new ActivePlan(p, entryDate, actualEntryPrice);
         }
     }

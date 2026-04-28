@@ -14,11 +14,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
+import time
 from typing import Any
 
 import httpx
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -69,6 +72,55 @@ class TradePlanResponse(BaseModel):
     expectedDays: int = 5
     maxDays: int = config.HORIZON_DAYS
     reason: str = ""
+    features: dict[str, float] | None = None
+
+
+# ── 글로벌 지수/환율 캐시 ────────────────────────────────────────────────────
+
+_global_cache: dict[str, pd.DataFrame] = {}
+_global_cache_ts: float = 0.0
+_global_lock = threading.Lock()
+
+
+def _fetch_global_data() -> dict[str, pd.DataFrame]:
+    """NASDAQ, S&P500, USD/KRW 데이터를 yfinance에서 가져와 캐싱.
+
+    TTL(GLOBAL_DATA_CACHE_TTL) 내 재호출은 캐시 반환.
+    """
+    global _global_cache, _global_cache_ts
+    with _global_lock:
+        now = time.time()
+        if _global_cache and (now - _global_cache_ts) < config.GLOBAL_DATA_CACHE_TTL:
+            return _global_cache
+
+        result: dict[str, pd.DataFrame] = {}
+        for key, symbol in config.GLOBAL_TICKERS.items():
+            try:
+                raw = yf.download(symbol, period="10y", auto_adjust=True, progress=False)
+                if raw.empty:
+                    log.warning("글로벌 데이터 없음: %s (%s)", key, symbol)
+                    result[key] = pd.DataFrame(columns=["date", "close"])
+                    continue
+                # yfinance 버전에 따라 MultiIndex 컬럼일 수 있음
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw.columns = raw.columns.droplevel(1)
+                df = raw[["Close"]].copy()
+                df.columns = ["close"]
+                # 타임존 제거 → date 비교 통일
+                df.index = pd.to_datetime(df.index)
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                df["date"] = df.index.normalize()
+                df = df.reset_index(drop=True)[["date", "close"]].dropna()
+                result[key] = df
+                log.info("글로벌 데이터 로드: %s (%s) %d행", key, symbol, len(df))
+            except Exception as e:
+                log.warning("글로벌 데이터 조회 실패 (%s=%s): %s", key, symbol, e)
+                result[key] = pd.DataFrame(columns=["date", "close"])
+
+        _global_cache = result
+        _global_cache_ts = time.time()
+        return result
 
 
 # ── 시작 시 모델 로드 ──────────────────────────────────────────────────────
@@ -90,7 +142,19 @@ def health():
 
 @app.get("/model/status")
 def model_status():
-    return {"ready": models.is_ready(), "meta": models.meta}
+    freshness: dict = {}
+    with _global_lock:
+        for key, df in _global_cache.items():
+            if not df.empty and "date" in df.columns:
+                latest = df["date"].max()
+                try:
+                    freshness[key] = str(latest.date())
+                except AttributeError:
+                    freshness[key] = str(latest)[:10]
+            else:
+                freshness[key] = None
+        freshness["last_fetch_ts"] = _global_cache_ts if _global_cache_ts else None
+    return {"ready": models.is_ready(), "meta": models.meta, "global_data_freshness": freshness}
 
 
 @app.post("/predict", response_model=TradePlanResponse)
@@ -136,8 +200,10 @@ def _predict_one(ticker: str, candles: list[dict], index_candles: list[dict],
         return TradePlanResponse(ticker=ticker, confidence=0.0, mlScore=0.0,
                                  reason=f"캔들 부족 ({len(df)})")
 
+    global_df_map = _fetch_global_data()
+
     at_idx = len(df) - 1
-    feats = build_feature_vector(ticker, df, idx, at_idx, market_breadth)
+    feats = build_feature_vector(ticker, df, idx, at_idx, market_breadth, global_df_map)
     try:
         pred = models.predict_one(feats)
     except Exception as e:
@@ -147,9 +213,10 @@ def _predict_one(ticker: str, candles: list[dict], index_candles: list[dict],
     entry = float(df["close"].iloc[at_idx])
     atr_pct = feats.get("atr14_pct", 0.02)
     vol_scale = max(config.VOL_SCALE_MIN, min(config.VOL_SCALE_MAX, atr_pct / config.ATR_BASE))
+    tp_pct = config.TP_BASE_PCT * vol_scale   # 학습과 동일: ATR 기반 종목별 TP
     sl_pct = config.SL_BASE_PCT * vol_scale
-    # TP 는 모델 예측값과 ATR 기반 기본값 중 더 큰 쪽 (최소 +2%)
-    expected_ret = max(pred["expected_return"], config.TP_BASE_PCT)
+    # 모델 예측 수익률 vs ATR 기반 TP 중 더 큰 값 사용 (종목별 차별화)
+    expected_ret = max(pred["expected_return"], tp_pct)
     tp_price = entry * (1 + expected_ret)
     sl_price = entry * (1 - sl_pct)
 
@@ -164,6 +231,7 @@ def _predict_one(ticker: str, candles: list[dict], index_candles: list[dict],
         expectedDays=int(pred["expected_days"]),
         maxDays=config.HORIZON_DAYS,
         reason=f"ML conf={conf*100:.1f}% expRet={expected_ret*100:.2f}% days={pred['expected_days']}",
+        features={k: float(v) for k, v in feats.items()},
     )
 
 
@@ -231,6 +299,11 @@ async def _train_all() -> dict:
         idx_raw = await _fetch_candles(client, config.KOSPI_INDEX_CODE, config.HISTORY_DAYS)
         idx_df = to_df(idx_raw)
 
+        # 글로벌 지수/환율 데이터 (thread pool에서 동기 실행)
+        loop = asyncio.get_event_loop()
+        global_df_map = await loop.run_in_executor(None, _fetch_global_data)
+        log.info("글로벌 데이터 준비 완료")
+
         # Phase 1: 전체 캔들 수집 (breadth 계산용)
         log.info("캔들 수집 중 — breadth 계산 포함")
         all_dfs: dict[str, pd.DataFrame] = {}
@@ -252,7 +325,8 @@ async def _train_all() -> dict:
         for i, (ticker, df) in enumerate(all_dfs.items()):
             try:
                 X_t, dates_t = feature_matrix(ticker, df, idx_df, min_idx=60,
-                                              breadth_by_date=breadth_by_date)
+                                              breadth_by_date=breadth_by_date,
+                                              global_df_map=global_df_map)
                 if X_t.empty: continue
 
                 # 각 row 에 대응하는 label 생성

@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/strategy/ml-performance")
 @RequiredArgsConstructor
@@ -17,6 +19,11 @@ public class MlPerformanceController {
     @GetMapping("/summary")
     public MlSummaryDto getSummary() {
         return performanceService.getSummary();
+    }
+
+    @GetMapping("/confidence-tiers")
+    public List<ConfidenceTierDto> getConfidenceTiers() {
+        return performanceService.getConfidenceTierStats();
     }
 
     @GetMapping("/trades")

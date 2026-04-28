@@ -252,7 +252,7 @@ public class SlackNotifier {
                           int expectedDays, int maxDays) {
         String text = String.format(
                 "✅ *[ML 예측 매수]* %s\n" +
-                "> 확신도: %.0f%%  |  스코어: %.1f\n" +
+                "> confidence: %.0f%%  |  score: %.1f\n" +
                 "> 매수가: %s원  |  TP: %s원  |  SL: %s원\n" +
                 "> 예상 보유: %d일 (최대 %d일)",
                 formatStock(stockName, ticker),
@@ -289,6 +289,36 @@ public class SlackNotifier {
     }
 
     /**
+     * ML 재평가 알림 — expectedDays 경과 후 재추론 결과.
+     */
+    public void sendMlReEval(String ticker, String stockName,
+                              java.math.BigDecimal entryPrice, java.math.BigDecimal currentPrice,
+                              double newConfidence, double threshold,
+                              java.math.BigDecimal newTp, java.math.BigDecimal newSl,
+                              int elapsed, int maxDays, boolean extended) {
+        double roi = 0;
+        if (entryPrice != null && entryPrice.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            roi = currentPrice.subtract(entryPrice)
+                    .divide(entryPrice, 4, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+        }
+        String emoji    = extended ? "🔄" : "⚠️";
+        String decision = extended ? "홀딩 연장" : "청산 결정";
+        String text = String.format(
+                "%s *[ML 재평가 | %s]* %s\n" +
+                "> confidence: %.0f%% (기준 %.0f%%) → %s\n" +
+                "> 수익률: %s%.2f%%  |  %d거래일 보유\n" +
+                "> 매수: %s원  |  현재: %s원\n" +
+                "> 새 TP: %s원  |  새 SL: %s원  |  최대: %d일",
+                emoji, decision, formatStock(stockName, ticker),
+                newConfidence * 100, threshold * 100, extended ? "연장" : "매도",
+                roi >= 0 ? "+" : "", roi, elapsed,
+                formatPrice(entryPrice), formatPrice(currentPrice),
+                formatPrice(newTp), formatPrice(newSl), maxDays);
+        send(text);
+    }
+
+    /**
      * ML 전략 — 연속 DEFER {@code count}회로 당일 블랙리스트 등록.
      */
     public void sendMlBlacklist(String ticker, String stockName, int count) {
@@ -296,6 +326,18 @@ public class SlackNotifier {
                 "⛔ *[ML 블랙리스트]* %s\n> 연속 DEFER %d회 → 당일 추가 평가 제외",
                 formatStock(stockName, ticker), count);
         send(text);
+    }
+
+    /**
+     * 데이터 신선도 경고 — 3거래일(5캘린더일) 이상 수신되지 않은 데이터 소스 목록.
+     */
+    public void sendDataFreshnessAlert(List<String> staleItems) {
+        if (staleItems.isEmpty()) return;
+        String lines = staleItems.stream()
+                .map(s -> "> • " + s)
+                .collect(Collectors.joining("\n"));
+        send("⚠️ *[데이터 신선도 경고]* 다음 데이터가 오래됐습니다:\n" + lines
+                + "\n> ML 추론 정확도에 영향을 줄 수 있습니다.");
     }
 
     /**

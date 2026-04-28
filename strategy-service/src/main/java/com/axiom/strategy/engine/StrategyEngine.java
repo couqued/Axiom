@@ -18,6 +18,7 @@ import com.axiom.strategy.dto.TradePlanDto;
 import com.axiom.strategy.notification.SlackNotifier;
 import com.axiom.strategy.service.BollingerReserveService;
 import com.axiom.strategy.service.DailySellBlockService;
+import com.axiom.strategy.service.EntryQualityEvaluator;
 import com.axiom.strategy.service.MarketState;
 import com.axiom.strategy.service.MarketStateService;
 import com.axiom.strategy.service.TimeCutService;
@@ -64,6 +65,7 @@ public class StrategyEngine {
     private final com.axiom.strategy.service.MlExitService mlExitService;
     private final com.axiom.strategy.service.MlDeferTracker mlDeferTracker;
     private final MlClient mlClient;
+    private final EntryQualityEvaluator entryQualityEvaluator;
 
     private volatile List<String> watchTickers = List.of();
     private volatile List<SignalGapDto> signalGapCache = List.of();
@@ -81,8 +83,9 @@ public class StrategyEngine {
 
     @PostConstruct
     public void init() {
-        watchTickers = strategyConfig.getWatchTickers();
-        log.info("[Engine] 초기 감시 종목 로드 — yml fallback {}개", watchTickers.size());
+        List<String> yml = strategyConfig.getWatchTickers();
+        watchTickers = (yml != null) ? yml : List.of();
+        log.info("[Engine] 초기 감시 종목 — yml fallback {}개 (기동 후 screened-tickers로 교체 예정)", watchTickers.size());
     }
 
     public void updateWatchTickers(List<String> tickers) {
@@ -131,11 +134,22 @@ public class StrategyEngine {
         List<PortfolioItemDto> positions = portfolioClient.getPositions();
         Map<String, Integer> stages = strategyStateStore.loadAllBuyStages();
         Map<String, String> tags = strategyStateStore.loadAllEntryTags();
+        LocalDate today = LocalDate.now(TradingCalendar.KST);
         positions.forEach(p -> {
             Integer s = stages.get(p.getTicker());
             if (s != null) p.withBuyStage(s);
             String tag = tags.get(p.getTicker());
             if (tag != null) p.withEntryTag(tag);
+            if ("ml-prediction".equals(tag)) {
+                mlPositionStore.getActive(p.getTicker()).ifPresent(ap -> {
+                    com.axiom.strategy.dto.TradePlanDto plan = ap.plan();
+                    int elapsed   = TradingCalendar.tradingDaysBetween(ap.entryDate(), today);
+                    int remaining = plan.expectedDays() - elapsed;
+                    p.withMlPlan(plan.confidence(), plan.mlScore(),
+                            plan.takeProfitPrice(), plan.stopLossPrice(),
+                            plan.expectedDays(), remaining);
+                });
+            }
         });
         return positions;
     }
@@ -355,24 +369,24 @@ public class StrategyEngine {
         } } // end buyQueue loop
 
         // ML 전략 BUY 후보 중 매수 미선정된 종목 → DEFER 카운트
-        // multiplier < 0.90 (가격 과열)으로 밀린 경우는 블랙리스트 카운트 제외 — 눌림목 복귀 후 재진입 허용
+        // 한도초과·예산부족·중단은 신호 품질과 무관한 외부 제약이므로 제외
         for (BuyCandidate candidate : buyQueue) {
             String t = candidate.signal().getTicker();
             String strat = candidate.signal().getStrategyName();
             if (!"ml-prediction".equals(strat)) continue;
             String outcome = candidateResultMap.getOrDefault(t, "대기");
-            if (!"매수".equals(outcome)) {
-                boolean countForBlacklist = mlPositionStore.getStaged(t)
-                        .map(staged -> staged.multiplier() >= 0.90)
-                        .orElse(true);
-                mlDeferTracker.recordDefer(t, countForBlacklist);
-                mlPositionStore.clearStaged(t);
-            }
+            if ("매수".equals(outcome) || "한도초과".equals(outcome)
+                    || "예산부족".equals(outcome) || "중단".equals(outcome)) continue;
+            boolean countForBlacklist = mlPositionStore.getStaged(t)
+                    .map(staged -> staged.multiplier() >= 0.90)
+                    .orElse(true);
+            mlDeferTracker.recordDefer(t, countForBlacklist);
+            mlPositionStore.clearStaged(t);
         }
 
-        // ML 활성 포지션 TP/SL/maxDays 청산 검사
+        // ML 활성 포지션 TP/SL/maxDays 청산 검사 — 당 사이클 매수 반영을 위해 포지션 재조회
         try {
-            mlExitService.check(positions);
+            mlExitService.check(portfolioClient.getPositions());
         } catch (Exception ex) {
             log.warn("[Engine] MlExitService 체크 실패: {}", ex.getMessage());
         }
@@ -955,15 +969,25 @@ public class StrategyEngine {
 
     // ── ML 드라이런 ────────────────────────────────────────────────────────────
 
-    public record MlDryRunResult(String ticker, String stockName,
-                                  double confidence, boolean aboveThreshold, String reason) {}
+    public record MlDryRunResult(
+            String ticker, String stockName,
+            double confidence,        // raw ML 확신도 (0~1)
+            double mlScore,           // confidence × 100 (EntryQuality 곱셈 기반)
+            double entryMultiplier,   // EntryQuality 배수 (0.5~1.1; DEFER이면 0)
+            double effectiveScore,    // mlScore × entryMultiplier (실제 경쟁에 쓰이는 점수)
+            boolean aboveThreshold,   // confidence >= mlBuyThreshold
+            boolean deferred,         // DEFER 블랙리스트 또는 EntryQuality 강제 DEFER
+            boolean alreadyHeld,      // 이미 ML 보유 포지션
+            String reason
+    ) {}
 
-    /** 실제 주문 없이 watch-tickers 전체에 ML 예측을 실행하고 확신도 순으로 반환. */
+    /** 실제 주문 없이 watch-tickers 전체에 ML 예측을 실행하고 실제 매수 경쟁 점수(effectiveScore) 순으로 반환. */
     public List<MlDryRunResult> runMlDryRun() {
         int candleDays = strategyConfig.getCandleDays();
         List<CandleDto> indexCandles = marketStateService.getKospiCandlesCached();
         double threshold = adminConfigStore.getMlBuyThreshold();
         double marketBreadth = marketStateService.getMarketBreadth();
+        boolean entryTimingEnabled = adminConfigStore.isMlEntryTimingEnabled();
         Map<String, String> tickerNames = marketClient.getTickerNames();
         List<MlDryRunResult> results = new ArrayList<>();
 
@@ -973,9 +997,33 @@ public class StrategyEngine {
                 if (candles == null || candles.isEmpty()) continue;
                 TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, marketBreadth);
                 if (plan == null) continue;
+
                 String name = tickerNames.getOrDefault(ticker, ticker);
-                results.add(new MlDryRunResult(ticker, name, plan.confidence(),
-                        plan.confidence() >= threshold, plan.reason()));
+                boolean aboveThreshold = plan.confidence() >= threshold;
+                boolean alreadyHeld = mlPositionStore.isActive(ticker);
+                boolean deferred = mlDeferTracker.isBlacklisted(ticker);
+
+                double multiplier = 1.0;
+                if (!deferred && aboveThreshold && entryTimingEnabled) {
+                    multiplier = entryQualityEvaluator.evaluate(ticker, plan.entryPrice(), candles);
+                    if (multiplier <= 0.0) {
+                        deferred = true;
+                        multiplier = 0.0;
+                    }
+                } else if (!entryTimingEnabled) {
+                    multiplier = 1.0;
+                }
+
+                double effectiveScore = deferred ? 0.0 : plan.mlScore() * multiplier;
+
+                results.add(new MlDryRunResult(
+                        ticker, name,
+                        plan.confidence(), plan.mlScore(),
+                        deferred ? 0.0 : multiplier,
+                        effectiveScore,
+                        aboveThreshold, deferred, alreadyHeld,
+                        plan.reason()
+                ));
                 Thread.sleep(100);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -985,7 +1033,16 @@ public class StrategyEngine {
             }
         }
 
-        results.sort(Comparator.comparingDouble(MlDryRunResult::confidence).reversed());
+        // 정렬: 매수후보(임계값 이상·비보유·비DEFER) → 보유중 → 임계값미달 → DEFER
+        results.sort(Comparator
+                .comparingInt((MlDryRunResult r) -> {
+                    if (!r.deferred() && r.aboveThreshold() && !r.alreadyHeld()) return 0;
+                    if (r.alreadyHeld()) return 1;
+                    if (!r.aboveThreshold()) return 2;
+                    return 3;
+                })
+                .thenComparingDouble(r -> -r.effectiveScore())
+        );
         return results;
     }
 

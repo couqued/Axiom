@@ -27,9 +27,7 @@ spring:
         default_schema: strategy
 
 strategy:
-  watch-tickers:       # 전략 감시 대상 종목 (최대 수십 개 가능, 5~10개 권장)
-    - "005930"         # 삼성전자
-    - "000660"         # SK하이닉스
+  # watch-tickers: 기동 시 market-service /internal/screened-tickers 에서 동적 로드 (stock-universe.json)
   candle-days: 90      # 지표 계산용 캔들 개수 (ML 최소 80 필요)
   position-sizing:
     invest-amount-krw: 500000   # 1회 매수 금액(원). 수량 = floor(금액 / 현재가)

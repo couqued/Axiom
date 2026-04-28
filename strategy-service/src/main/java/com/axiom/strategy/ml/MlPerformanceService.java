@@ -18,8 +18,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class MlPerformanceService {
 
-    private final MlModelSnapshotRepository snapshotRepo;
-    private final MlTradeResultRepository   tradeResultRepo;
+    private final MlModelSnapshotRepository     snapshotRepo;
+    private final MlTradeResultRepository       tradeResultRepo;
+    private final MlPredictionFeatureRepository predictionFeatureRepo;
 
     @Transactional
     public void saveSnapshotIfNew(String trainedAt, Integer samples,
@@ -74,7 +75,13 @@ public class MlPerformanceService {
                 .exitAt(LocalDateTime.now())
                 .build();
 
-        tradeResultRepo.save(result);
+        MlTradeResult saved = tradeResultRepo.save(result);
+
+        // 해당 종목의 가장 최근 저장된 피처 벡터와 이번 거래 결과 연결
+        predictionFeatureRepo
+                .findTopByTickerAndMlTradeResultIdIsNullOrderByPredictedAtDesc(ticker)
+                .ifPresent(f -> f.linkTradeResult(saved.getId()));
+
         log.info("[MlPerformance] 매매결과 저장 — ticker: {}, actual: {}%, predicted: {}%, win: {}",
                 ticker,
                 String.format("%.2f", actualReturn),
@@ -107,6 +114,24 @@ public class MlPerformanceService {
                 winRate,
                 avgReturn
         );
+    }
+
+    @Transactional(readOnly = true)
+    public List<ConfidenceTierDto> getConfidenceTierStats() {
+        return tradeResultRepo.findConfidenceTierStats().stream()
+                .map(p -> {
+                    int total = p.getTradeCount() != null ? p.getTradeCount() : 0;
+                    int wins  = p.getWinCount()   != null ? p.getWinCount()   : 0;
+                    double wr = total > 0 ? wins * 100.0 / total : 0.0;
+                    return new ConfidenceTierDto(
+                            p.getTier(),
+                            total,
+                            wins,
+                            wr,
+                            p.getAvgReturnPct() != null ? p.getAvgReturnPct() : 0.0
+                    );
+                })
+                .toList();
     }
 
     @Transactional(readOnly = true)

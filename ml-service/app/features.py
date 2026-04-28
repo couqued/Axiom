@@ -1,10 +1,11 @@
 """
-28개 피처 엔지니어링.
+36개 피처 엔지니어링.
 
-A. 개별 종목 기술적 지표 (15)
+A. 개별 종목 기술적 지표 (18)  ← OBV 2개 + rolling VWAP 1개 추가
 B. 시장 regime (5)
 C. 섹터 상대강도 (3) — 데이터 부족 시 0 충전 (향후 stock-universe 섹터 필드 추가 필요)
 D. 시간/캘린더 (5)
+E. 글로벌 지수/환율 (5) — NASDAQ, S&P500, USD/KRW
 
 입력: candles (list of dicts with tradeDate/openPrice/highPrice/lowPrice/closePrice/volume)
      indexCandles (KOSPI 일봉, 동일 스키마)
@@ -21,12 +22,13 @@ import pandas as pd
 
 
 FEATURE_NAMES = [
-    # A. 기술 (15)
+    # A. 기술 (18)
     "rsi14", "macd_hist", "bb_pctb", "bb_bandwidth",
     "sma5_sma20_ratio", "close_vs_sma20", "close_vs_sma60",
     "vol_ratio", "ret_5d", "ret_10d", "ret_20d",
     "daily_range_pct", "close_pos_in_range",
     "atr14_pct", "vol_slope_5d",
+    "obv_vs_ema20", "obv_slope_5d", "close_vs_vwap20",
     # B. 시장 regime (5)
     "kospi_ma20_ratio", "kospi_ret_5d", "kospi_atr_pct",
     "kospi_above_ma60", "market_breadth",
@@ -35,6 +37,10 @@ FEATURE_NAMES = [
     # D. 시간 (5)
     "day_of_week", "day_of_month", "days_to_month_end",
     "days_since_earnings", "is_options_expiry_week",
+    # E. 글로벌 지수/환율 (5)
+    "nasdaq_ret_1d", "nasdaq_vs_ma20",
+    "sp500_ret_1d",
+    "usdkrw_ret_5d", "usdkrw_vs_ma20",
 ]
 
 
@@ -117,8 +123,24 @@ def _rolling_slope(x: pd.Series, window: int = 5) -> pd.Series:
     return x.rolling(window).apply(_slope, raw=True)
 
 
+def _obv(df: pd.DataFrame) -> pd.Series:
+    """On-Balance Volume: 상승일 +vol, 하락일 -vol 누적합."""
+    close = df["close"]
+    vol = df["volume"].astype("float64")
+    direction = np.sign(close.diff().fillna(0))
+    return (direction * vol).cumsum()
+
+
+def _rolling_vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """period일 롤링 VWAP = sum(typical_price × vol) / sum(vol)."""
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    vol = df["volume"].astype("float64").replace(0, np.nan)
+    tp_vol = typical * vol
+    return tp_vol.rolling(period).sum() / vol.rolling(period).sum()
+
+
 def compute_stock_features(df: pd.DataFrame, at_idx: int) -> dict[str, float]:
-    """df[at_idx] 시점 기준의 개별 종목 피처 15개 계산."""
+    """df[at_idx] 시점 기준의 개별 종목 피처 18개 계산."""
     close = df["close"]
     vol   = df["volume"].astype("float64")
 
@@ -142,6 +164,21 @@ def compute_stock_features(df: pd.DataFrame, at_idx: int) -> dict[str, float]:
         return float(curr / prev - 1)
 
     vol_slope = _rolling_slope(vol, 5).iloc[at_idx] if at_idx >= 4 else 0.0
+
+    # OBV 지표
+    obv_s = _obv(df)
+    obv_ema20 = obv_s.ewm(span=20, adjust=False).mean().iloc[at_idx]
+    obv_curr = float(obv_s.iloc[at_idx])
+    obv_vs_ema20 = float(obv_curr / obv_ema20) if obv_ema20 != 0 else 1.0
+    # OBV slope를 평균 거래량으로 정규화 → 종목 간 비교 가능
+    obv_slope_raw = _rolling_slope(obv_s, 5).iloc[at_idx] if at_idx >= 4 else 0.0
+    obv_slope_5d = float(obv_slope_raw / vol_ma20) if vol_ma20 and vol_ma20 > 0 else 0.0
+
+    # 20일 롤링 VWAP
+    vwap20_s = _rolling_vwap(df)
+    vwap20 = vwap20_s.iloc[at_idx]
+    vwap20_f = float(vwap20) if not pd.isna(vwap20) else 0.0
+    close_vs_vwap20 = (float(curr) - vwap20_f) / vwap20_f * 100 if vwap20_f != 0 else 0.0
 
     def _f(v, default=0.0):
         try:
@@ -170,6 +207,9 @@ def compute_stock_features(df: pd.DataFrame, at_idx: int) -> dict[str, float]:
         "close_pos_in_range": (curr - low) / (high - low) if high > low else 0.5,
         "atr14_pct":          _f(atr14 / curr if curr else 0.0, 0.02),
         "vol_slope_5d":       _f(vol_slope),
+        "obv_vs_ema20":       _f(obv_vs_ema20, 1.0),
+        "obv_slope_5d":       _f(obv_slope_5d),
+        "close_vs_vwap20":    _f(close_vs_vwap20),
     }
 
 
@@ -203,6 +243,66 @@ def compute_kospi_features(idx_df: pd.DataFrame, at_date: pd.Timestamp,
         "kospi_above_ma60":   1.0 if last > ma60 else 0.0,
         "market_breadth":     float(market_breadth),
     }
+
+
+def compute_global_features(
+    global_df_map: dict[str, pd.DataFrame] | None,
+    at_date: pd.Timestamp,
+) -> dict[str, float]:
+    """NASDAQ, S&P500, USD/KRW 글로벌 피처 5개.
+
+    at_date 미만(strictly <) 데이터만 사용 — 한국 장 시작 시점에
+    당일 미국 종가는 아직 미확정이므로 전일 종가를 기준으로 함.
+    """
+    defaults = {
+        "nasdaq_ret_1d": 0.0, "nasdaq_vs_ma20": 1.0,
+        "sp500_ret_1d": 0.0,
+        "usdkrw_ret_5d": 0.0, "usdkrw_vs_ma20": 1.0,
+    }
+    if not global_df_map:
+        return defaults
+
+    result: dict[str, float] = {}
+
+    def _usable(key: str, n_min: int = 2) -> pd.Series | None:
+        df = global_df_map.get(key)
+        if df is None or df.empty:
+            return None
+        sub = df[df["date"] < at_date]
+        return sub["close"] if len(sub) >= n_min else None
+
+    # NASDAQ
+    nasdaq_c = _usable("nasdaq")
+    if nasdaq_c is not None and len(nasdaq_c) >= 2:
+        last, prev = float(nasdaq_c.iloc[-1]), float(nasdaq_c.iloc[-2])
+        ma20 = nasdaq_c.rolling(20).mean().iloc[-1]
+        result["nasdaq_ret_1d"] = float(last / prev - 1) if prev else 0.0
+        result["nasdaq_vs_ma20"] = float(last / ma20) if ma20 and not pd.isna(ma20) else 1.0
+    else:
+        result["nasdaq_ret_1d"] = defaults["nasdaq_ret_1d"]
+        result["nasdaq_vs_ma20"] = defaults["nasdaq_vs_ma20"]
+
+    # S&P 500
+    sp500_c = _usable("sp500")
+    if sp500_c is not None and len(sp500_c) >= 2:
+        last, prev = float(sp500_c.iloc[-1]), float(sp500_c.iloc[-2])
+        result["sp500_ret_1d"] = float(last / prev - 1) if prev else 0.0
+    else:
+        result["sp500_ret_1d"] = defaults["sp500_ret_1d"]
+
+    # USD/KRW
+    usdkrw_c = _usable("usdkrw", n_min=6)
+    if usdkrw_c is not None and len(usdkrw_c) >= 6:
+        last = float(usdkrw_c.iloc[-1])
+        prev5 = float(usdkrw_c.iloc[-6])
+        ma20 = usdkrw_c.rolling(20).mean().iloc[-1]
+        result["usdkrw_ret_5d"] = float(last / prev5 - 1) if prev5 else 0.0
+        result["usdkrw_vs_ma20"] = float(last / ma20) if ma20 and not pd.isna(ma20) else 1.0
+    else:
+        result["usdkrw_ret_5d"] = defaults["usdkrw_ret_5d"]
+        result["usdkrw_vs_ma20"] = defaults["usdkrw_vs_ma20"]
+
+    return result
 
 
 def compute_time_features(at_date: pd.Timestamp | datetime | date) -> dict[str, float]:
@@ -248,24 +348,28 @@ def build_feature_vector(ticker: str,
                          df: pd.DataFrame,
                          idx_df: pd.DataFrame,
                          at_idx: int,
-                         market_breadth: float = 0.5) -> dict[str, float]:
-    """df[at_idx] 시점 기준 28개 피처 벡터."""
+                         market_breadth: float = 0.5,
+                         global_df_map: dict | None = None) -> dict[str, float]:
+    """df[at_idx] 시점 기준 36개 피처 벡터."""
     stock = compute_stock_features(df, at_idx)
     at_date = df["date"].iloc[at_idx]
     kospi = compute_kospi_features(idx_df, at_date, market_breadth)
     sector = compute_sector_features(ticker, df, at_idx)
     time_f = compute_time_features(at_date)
-    return {**stock, **kospi, **sector, **time_f}
+    global_f = compute_global_features(global_df_map, at_date)
+    return {**stock, **kospi, **sector, **time_f, **global_f}
 
 
 def feature_matrix(ticker: str,
                    df: pd.DataFrame,
                    idx_df: pd.DataFrame,
                    min_idx: int = 60,
-                   breadth_by_date: dict | None = None) -> tuple[pd.DataFrame, pd.Series]:
+                   breadth_by_date: dict | None = None,
+                   global_df_map: dict | None = None) -> tuple[pd.DataFrame, pd.Series]:
     """학습용 — df 전체에 대해 at_idx=min_idx..len-1 피처·date 반환.
 
     breadth_by_date: {date → float} 날짜별 market_breadth. None이면 0.5 고정.
+    global_df_map: {key → DataFrame} NASDAQ/S&P/FX 데이터. None이면 default값 사용.
     """
     rows = []
     dates = []
@@ -273,7 +377,7 @@ def feature_matrix(ticker: str,
     for i in range(min_idx, n):
         at_date = df["date"].iloc[i]
         mb = breadth_by_date.get(at_date, 0.5) if breadth_by_date else 0.5
-        feat = build_feature_vector(ticker, df, idx_df, i, mb)
+        feat = build_feature_vector(ticker, df, idx_df, i, mb, global_df_map)
         rows.append(feat)
         dates.append(at_date)
     return pd.DataFrame(rows, columns=FEATURE_NAMES), pd.Series(dates, name="date")
