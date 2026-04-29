@@ -1,11 +1,13 @@
 package com.axiom.market.controller;
 
 import com.axiom.market.dto.CandleDto;
+import com.axiom.market.dto.InvestorFlowDto;
 import com.axiom.market.dto.MinuteCandleDto;
 import com.axiom.market.dto.StockInfoDto;
 import com.axiom.market.dto.StockPriceDto;
 import com.axiom.market.service.CandleService;
 import com.axiom.market.service.IndexCandleService;
+import com.axiom.market.service.InvestorFlowService;
 import com.axiom.market.service.KisMarketApiService;
 import com.axiom.market.service.MinuteCandleService;
 import com.axiom.market.service.StockSearchService;
@@ -25,6 +27,7 @@ public class StockController {
     private final CandleService candleService;
     private final IndexCandleService indexCandleService;
     private final MinuteCandleService minuteCandleService;
+    private final InvestorFlowService investorFlowService;
 
     // 현재가 조회: GET /api/market/stocks/{ticker}/price → 게이트웨이가 /api/stocks/{ticker}/price 로 라우팅
     @GetMapping("/stocks/{ticker}/price")
@@ -68,5 +71,21 @@ public class StockController {
             @PathVariable String code,
             @RequestParam(defaultValue = "25") int days) {
         return ResponseEntity.ok(indexCandleService.getIndexCandles(code, days));
+    }
+
+    // 투자자 매매 과거 N일 조회: GET /api/stocks/{ticker}/investor-flows?days=30
+    @GetMapping("/stocks/{ticker}/investor-flows")
+    public ResponseEntity<List<InvestorFlowDto>> getInvestorFlows(
+            @PathVariable String ticker,
+            @RequestParam(defaultValue = "30") int days) {
+        return ResponseEntity.ok(investorFlowService.getFlows(ticker, days));
+    }
+
+    // 투자자 매매 당일 실시간 조회: GET /api/stocks/{ticker}/investor-flows/today
+    @GetMapping("/stocks/{ticker}/investor-flows/today")
+    public ResponseEntity<InvestorFlowDto> getTodayInvestorFlow(@PathVariable String ticker) {
+        InvestorFlowDto dto = investorFlowService.getTodayFlow(ticker);
+        if (dto == null) return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(dto);
     }
 }

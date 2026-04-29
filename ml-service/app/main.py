@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from . import config
 from .features import (
-    FEATURE_NAMES, build_feature_vector, feature_matrix, to_df,
+    FEATURE_NAMES, build_feature_vector, feature_matrix, to_df, to_flow_df,
 )
 from .labels import label_triple_barrier
 from .model import models
@@ -54,12 +54,16 @@ class PredictRequest(BaseModel):
     candles: list[dict[str, Any]] = Field(default_factory=list)
     indexCandles: list[dict[str, Any]] = Field(default_factory=list)
     marketBreadth: float = Field(default=0.5, ge=0.0, le=1.0)
+    investorFlows: list[dict[str, Any]] = Field(default_factory=list)   # 과거 rolling용
+    todayInvestorFlow: dict[str, Any] | None = None                     # 당일 실시간용
 
 
 class BatchPredictRequest(BaseModel):
     candles: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     indexCandles: list[dict[str, Any]] = Field(default_factory=list)
     marketBreadth: float = Field(default=0.5, ge=0.0, le=1.0)
+    investorFlows: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)    # ticker → flows
+    todayInvestorFlows: dict[str, dict[str, Any]] = Field(default_factory=dict)     # ticker → today
 
 
 class TradePlanResponse(BaseModel):
@@ -159,7 +163,10 @@ def model_status():
 
 @app.post("/predict", response_model=TradePlanResponse)
 def predict(req: PredictRequest):
-    return _predict_one(req.ticker, req.candles, req.indexCandles, req.marketBreadth)
+    return _predict_one(
+        req.ticker, req.candles, req.indexCandles, req.marketBreadth,
+        req.investorFlows, req.todayInvestorFlow,
+    )
 
 
 @app.post("/predict/batch")
@@ -167,7 +174,11 @@ def predict_batch(req: BatchPredictRequest):
     result: dict[str, dict] = {}
     for ticker, candles in req.candles.items():
         try:
-            result[ticker] = _predict_one(ticker, candles, req.indexCandles, req.marketBreadth).dict()
+            result[ticker] = _predict_one(
+                ticker, candles, req.indexCandles, req.marketBreadth,
+                req.investorFlows.get(ticker, []),
+                req.todayInvestorFlows.get(ticker),
+            ).dict()
         except HTTPException as ex:
             result[ticker] = {
                 "ticker": ticker, "confidence": 0.0, "mlScore": 0.0,
@@ -189,7 +200,9 @@ async def train():
 # ── 추론 ────────────────────────────────────────────────────────────────────
 
 def _predict_one(ticker: str, candles: list[dict], index_candles: list[dict],
-                 market_breadth: float = 0.5) -> TradePlanResponse:
+                 market_breadth: float = 0.5,
+                 investor_flows: list[dict] | None = None,
+                 today_flow: dict | None = None) -> TradePlanResponse:
     if not models.is_ready():
         return TradePlanResponse(ticker=ticker, confidence=0.0, mlScore=0.0,
                                  reason="모델 미학습")
@@ -201,9 +214,12 @@ def _predict_one(ticker: str, candles: list[dict], index_candles: list[dict],
                                  reason=f"캔들 부족 ({len(df)})")
 
     global_df_map = _fetch_global_data()
+    flow_df = to_flow_df(investor_flows) if investor_flows else None
 
     at_idx = len(df) - 1
-    feats = build_feature_vector(ticker, df, idx, at_idx, market_breadth, global_df_map)
+    feats = build_feature_vector(
+        ticker, df, idx, at_idx, market_breadth, global_df_map, flow_df, today_flow,
+    )
     try:
         pred = models.predict_one(feats)
     except Exception as e:
@@ -288,6 +304,14 @@ async def _fetch_candles(client: httpx.AsyncClient, ticker: str, days: int) -> l
     return await _fetch_json(client, f"/api/stocks/{ticker}/candles?days={days}")
 
 
+async def _fetch_investor_flows(client: httpx.AsyncClient, ticker: str, days: int) -> list[dict]:
+    try:
+        return await _fetch_json(client, f"/api/stocks/{ticker}/investor-flows?days={days}")
+    except Exception as e:
+        log.warning("  - %s 투자자 데이터 조회 실패: %s", ticker, e)
+        return []
+
+
 async def _train_all() -> dict:
     async with httpx.AsyncClient(base_url=config.MARKET_SERVICE_URL) as client:
         tickers = await _fetch_watch_tickers(client)
@@ -304,9 +328,10 @@ async def _train_all() -> dict:
         global_df_map = await loop.run_in_executor(None, _fetch_global_data)
         log.info("글로벌 데이터 준비 완료")
 
-        # Phase 1: 전체 캔들 수집 (breadth 계산용)
-        log.info("캔들 수집 중 — breadth 계산 포함")
+        # Phase 1: 전체 캔들 + 투자자 데이터 수집 (breadth 계산용)
+        log.info("캔들+투자자 데이터 수집 중 — breadth 계산 포함")
         all_dfs: dict[str, pd.DataFrame] = {}
+        all_flow_dfs: dict[str, pd.DataFrame | None] = {}
         for i, ticker in enumerate(tickers):
             try:
                 raw = await _fetch_candles(client, ticker, config.HISTORY_DAYS)
@@ -315,6 +340,8 @@ async def _train_all() -> dict:
                     all_dfs[ticker] = df
             except Exception as e:
                 log.warning("  - [%d/%d] %s 캔들 수집 실패: %s", i+1, len(tickers), ticker, e)
+            flow_raw = await _fetch_investor_flows(client, ticker, config.HISTORY_DAYS)
+            all_flow_dfs[ticker] = to_flow_df(flow_raw) if flow_raw else None
 
         # Phase 2: 날짜별 market_breadth 계산
         breadth_by_date = _compute_breadth_by_date(all_dfs)
@@ -326,7 +353,8 @@ async def _train_all() -> dict:
             try:
                 X_t, dates_t = feature_matrix(ticker, df, idx_df, min_idx=60,
                                               breadth_by_date=breadth_by_date,
-                                              global_df_map=global_df_map)
+                                              global_df_map=global_df_map,
+                                              flow_df=all_flow_dfs.get(ticker))
                 if X_t.empty: continue
 
                 # 각 row 에 대응하는 label 생성

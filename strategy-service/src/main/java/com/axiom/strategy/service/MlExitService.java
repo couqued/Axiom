@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -121,7 +122,8 @@ public class MlExitService {
             return;
         }
 
-        TradePlanDto newPlan = mlClient.predict(ticker, candles, indexCandles, marketBreadth);
+        TradePlanDto newPlan = mlClient.predict(ticker, candles, indexCandles, marketBreadth,
+                Collections.emptyList(), null);
 
         if (newPlan == null) {
             log.warn("[MlExit] 재평가 ML 응답 없음 — 보수적 청산 ticker: {}", ticker);

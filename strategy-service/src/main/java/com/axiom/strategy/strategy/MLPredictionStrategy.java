@@ -1,8 +1,10 @@
 package com.axiom.strategy.strategy;
 
 import com.axiom.strategy.admin.AdminConfigStore;
+import com.axiom.strategy.client.MarketClient;
 import com.axiom.strategy.client.MlClient;
 import com.axiom.strategy.dto.CandleDto;
+import com.axiom.strategy.dto.InvestorFlowDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.dto.TradePlanDto;
 import com.axiom.strategy.service.EntryQualityEvaluator;
@@ -31,6 +33,7 @@ import java.util.List;
 public class MLPredictionStrategy implements TradingStrategy {
 
     private final MlClient mlClient;
+    private final MarketClient marketClient;
     private final MarketStateService marketStateService;
     private final MlPositionStore planStore;
     private final AdminConfigStore adminConfigStore;
@@ -56,7 +59,10 @@ public class MLPredictionStrategy implements TradingStrategy {
 
         List<CandleDto> indexCandles = marketStateService.getKospiCandlesCached();
         double marketBreadth = marketStateService.getMarketBreadth();
-        TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, marketBreadth);
+        List<InvestorFlowDto> investorFlows = marketClient.getInvestorFlows(ticker, 30);
+        InvestorFlowDto todayFlow = marketClient.getTodayInvestorFlow(ticker);
+        TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, marketBreadth,
+                investorFlows, todayFlow);
 
         if (plan == null) {
             return hold(ticker, "ML 응답 없음 (HOLD)");

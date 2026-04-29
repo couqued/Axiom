@@ -1,6 +1,7 @@
 package com.axiom.strategy.client;
 
 import com.axiom.strategy.dto.CandleDto;
+import com.axiom.strategy.dto.InvestorFlowDto;
 import com.axiom.strategy.dto.TradePlanDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,13 +35,17 @@ public class MlClient {
      * 단일 종목 추론. ml-service 실패 시 null → 호출자가 HOLD로 간주.
      */
     public TradePlanDto predict(String ticker, List<CandleDto> candles, List<CandleDto> indexCandles,
-                                double marketBreadth) {
+                                double marketBreadth,
+                                List<InvestorFlowDto> investorFlows,
+                                InvestorFlowDto todayInvestorFlow) {
         try {
             Map<String, Object> body = new HashMap<>();
             body.put("ticker", ticker);
             body.put("candles", candles);
             body.put("indexCandles", indexCandles != null ? indexCandles : Collections.emptyList());
             body.put("marketBreadth", marketBreadth);
+            body.put("investorFlows", investorFlows != null ? investorFlows : Collections.emptyList());
+            body.put("todayInvestorFlow", todayInvestorFlow);
             return mlWebClient.post()
                     .uri("/predict")
                     .bodyValue(body)

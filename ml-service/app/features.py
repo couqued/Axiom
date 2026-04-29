@@ -41,6 +41,12 @@ FEATURE_NAMES = [
     "nasdaq_ret_1d", "nasdaq_vs_ma20",
     "sp500_ret_1d",
     "usdkrw_ret_5d", "usdkrw_vs_ma20",
+    # F. 외국인·기관 순매수 (10)
+    "frgn_net_ratio_5d", "frgn_net_ratio_20d",
+    "orgn_net_ratio_5d", "orgn_net_ratio_20d",
+    "frgn_cum_slope_5d", "orgn_cum_slope_5d",
+    "frgn_orgn_aligned", "combined_net_ratio_5d",
+    "frgn_today_ratio",  "orgn_today_ratio",
 ]
 
 
@@ -67,6 +73,34 @@ def to_df(candles: list[dict]) -> pd.DataFrame:
     if "volume" in df.columns:
         df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
     return df.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
+
+
+def to_flow_df(flows: list[dict]) -> pd.DataFrame:
+    """InvestorFlowDto 목록 → 분석용 DataFrame.
+
+    컬럼: date, frgn_ntby_qty, orgn_ntby_qty, total_vol
+    """
+    cols = ["date", "frgn_ntby_qty", "orgn_ntby_qty", "total_vol"]
+    if not flows:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(flows)
+    rename_map = {
+        "tradeDate":    "date",
+        "frgnNtbyQty":  "frgn_ntby_qty",
+        "orgnNtbyQty":  "orgn_ntby_qty",
+        "totalVol":     "total_vol",
+    }
+    df = df.rename(columns=rename_map)
+    if "date" in df.columns:
+        def _parse_date(v):
+            if isinstance(v, list) and len(v) == 3:
+                return pd.Timestamp(year=int(v[0]), month=int(v[1]), day=int(v[2]))
+            return pd.to_datetime(v)
+        df["date"] = df["date"].apply(_parse_date)
+    for c in ("frgn_ntby_qty", "orgn_ntby_qty", "total_vol"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    return df.sort_values("date").reset_index(drop=True)
 
 
 def _rsi_wilder(close: pd.Series, period: int = 14) -> pd.Series:
@@ -344,20 +378,123 @@ def compute_sector_features(ticker: str, df: pd.DataFrame, at_idx: int) -> dict[
     return {"sector_rs_5d": 0.0, "sector_rank_pct": 0.5, "sector_momentum": 0.0}
 
 
+def compute_investor_features(
+    flow_df: pd.DataFrame | None,
+    at_date: pd.Timestamp,
+    today_flow: dict | None = None,
+) -> dict[str, float]:
+    """외국인·기관 순매수 피처 10개.
+
+    flow_df: to_flow_df()로 변환된 DataFrame (컬럼: date, frgn_ntby_qty, orgn_ntby_qty, total_vol).
+    at_date: 피처 계산 기준 날짜 (이 날짜까지의 데이터만 사용).
+    today_flow: 당일 실시간 데이터 dict (추론 시 전달). None이면 flow_df에서 at_date 행을 사용.
+    """
+    defaults = {
+        "frgn_net_ratio_5d":  0.0, "frgn_net_ratio_20d": 0.0,
+        "orgn_net_ratio_5d":  0.0, "orgn_net_ratio_20d": 0.0,
+        "frgn_cum_slope_5d":  0.0, "orgn_cum_slope_5d":  0.0,
+        "frgn_orgn_aligned":  0.0, "combined_net_ratio_5d": 0.0,
+        "frgn_today_ratio":   0.0, "orgn_today_ratio":   0.0,
+    }
+
+    if flow_df is None or flow_df.empty:
+        return defaults
+
+    usable = flow_df[flow_df["date"] <= at_date].copy()
+    if len(usable) < 5:
+        return defaults
+
+    frgn = usable["frgn_ntby_qty"].astype(float)
+    orgn = usable["orgn_ntby_qty"].astype(float)
+    vol  = usable["total_vol"].astype(float).replace(0, np.nan)
+
+    def _ratio(net: pd.Series, window: int) -> float:
+        if len(net) < window:
+            return 0.0
+        net_sum = net.iloc[-window:].sum()
+        vol_sum = vol.iloc[-window:].sum(skipna=True)
+        if not vol_sum or np.isnan(vol_sum):
+            return 0.0
+        return float(net_sum / vol_sum)
+
+    frgn_5  = _ratio(frgn, 5)
+    frgn_20 = _ratio(frgn, 20) if len(usable) >= 20 else 0.0
+    orgn_5  = _ratio(orgn, 5)
+    orgn_20 = _ratio(orgn, 20) if len(usable) >= 20 else 0.0
+
+    vol_ma5 = float(vol.iloc[-5:].mean(skipna=True)) if len(vol) >= 5 else 1.0
+    if not vol_ma5 or np.isnan(vol_ma5):
+        vol_ma5 = 1.0
+
+    frgn_slope_s = _rolling_slope(frgn.cumsum(), 5)
+    orgn_slope_s = _rolling_slope(orgn.cumsum(), 5)
+    frgn_slope = float(frgn_slope_s.iloc[-1] / vol_ma5) if not frgn_slope_s.empty else 0.0
+    orgn_slope = float(orgn_slope_s.iloc[-1] / vol_ma5) if not orgn_slope_s.empty else 0.0
+
+    if frgn_5 > 0 and orgn_5 > 0:
+        aligned = 1.0
+    elif frgn_5 < 0 and orgn_5 < 0:
+        aligned = -1.0
+    else:
+        aligned = 0.0
+
+    combined_5 = _ratio(frgn + orgn, 5)
+
+    # 당일 실시간 피처: today_flow 우선, 없으면 at_date 당일 행 사용
+    frgn_today = 0.0
+    orgn_today = 0.0
+    if today_flow is not None:
+        t_frgn = float(today_flow.get("frgnNtbyQty") or 0)
+        t_orgn = float(today_flow.get("orgnNtbyQty") or 0)
+        t_vol  = float(today_flow.get("totalVol") or 0)
+        if t_vol > 0:
+            frgn_today = t_frgn / t_vol
+            orgn_today = t_orgn / t_vol
+    else:
+        today_rows = usable[usable["date"] == at_date]
+        if not today_rows.empty:
+            row = today_rows.iloc[-1]
+            t_vol = float(row["total_vol"])
+            if t_vol > 0:
+                frgn_today = float(row["frgn_ntby_qty"]) / t_vol
+                orgn_today = float(row["orgn_ntby_qty"]) / t_vol
+
+    def _safe(v: float) -> float:
+        if np.isnan(v) or np.isinf(v):
+            return 0.0
+        return float(np.clip(v, -1.0, 1.0))
+
+    return {
+        "frgn_net_ratio_5d":     _safe(frgn_5),
+        "frgn_net_ratio_20d":    _safe(frgn_20),
+        "orgn_net_ratio_5d":     _safe(orgn_5),
+        "orgn_net_ratio_20d":    _safe(orgn_20),
+        "frgn_cum_slope_5d":     _safe(frgn_slope),
+        "orgn_cum_slope_5d":     _safe(orgn_slope),
+        "frgn_orgn_aligned":     aligned,
+        "combined_net_ratio_5d": _safe(combined_5),
+        "frgn_today_ratio":      _safe(frgn_today),
+        "orgn_today_ratio":      _safe(orgn_today),
+    }
+
+
 def build_feature_vector(ticker: str,
                          df: pd.DataFrame,
                          idx_df: pd.DataFrame,
                          at_idx: int,
                          market_breadth: float = 0.5,
-                         global_df_map: dict | None = None) -> dict[str, float]:
-    """df[at_idx] 시점 기준 36개 피처 벡터."""
+                         global_df_map: dict | None = None,
+                         flow_df: pd.DataFrame | None = None,
+                         today_flow: dict | None = None) -> dict[str, float]:
+    """df[at_idx] 시점 기준 46개 피처 벡터."""
     stock = compute_stock_features(df, at_idx)
     at_date = df["date"].iloc[at_idx]
     kospi = compute_kospi_features(idx_df, at_date, market_breadth)
     sector = compute_sector_features(ticker, df, at_idx)
     time_f = compute_time_features(at_date)
     global_f = compute_global_features(global_df_map, at_date)
-    return {**stock, **kospi, **sector, **time_f, **global_f}
+    investor_f = compute_investor_features(flow_df, at_date, today_flow)
+    return {**stock, **kospi, **sector, **time_f, **global_f, **investor_f}
 
 
 def feature_matrix(ticker: str,
@@ -365,11 +502,13 @@ def feature_matrix(ticker: str,
                    idx_df: pd.DataFrame,
                    min_idx: int = 60,
                    breadth_by_date: dict | None = None,
-                   global_df_map: dict | None = None) -> tuple[pd.DataFrame, pd.Series]:
+                   global_df_map: dict | None = None,
+                   flow_df: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.Series]:
     """학습용 — df 전체에 대해 at_idx=min_idx..len-1 피처·date 반환.
 
     breadth_by_date: {date → float} 날짜별 market_breadth. None이면 0.5 고정.
     global_df_map: {key → DataFrame} NASDAQ/S&P/FX 데이터. None이면 default값 사용.
+    flow_df: to_flow_df()로 변환된 투자자 데이터. None이면 investor 피처 0.0 충전.
     """
     rows = []
     dates = []
@@ -377,7 +516,7 @@ def feature_matrix(ticker: str,
     for i in range(min_idx, n):
         at_date = df["date"].iloc[i]
         mb = breadth_by_date.get(at_date, 0.5) if breadth_by_date else 0.5
-        feat = build_feature_vector(ticker, df, idx_df, i, mb, global_df_map)
+        feat = build_feature_vector(ticker, df, idx_df, i, mb, global_df_map, flow_df)
         rows.append(feat)
         dates.append(at_date)
     return pd.DataFrame(rows, columns=FEATURE_NAMES), pd.Series(dates, name="date")

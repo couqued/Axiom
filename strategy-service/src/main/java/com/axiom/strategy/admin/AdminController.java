@@ -25,6 +25,7 @@ import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import reactor.core.scheduler.Schedulers;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -169,7 +170,8 @@ public class AdminController {
             }
             try {
                 List<CandleDto> candles = marketClient.getCandles(ticker, 60);
-                TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, 0.5);
+                TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, 0.5,
+                        Collections.emptyList(), null);
                 if (plan == null || !plan.isBuy()) {
                     result.put(ticker, "SKIP (ML HOLD 또는 실패)");
                     continue;
@@ -201,6 +203,7 @@ public class AdminController {
     @PostMapping("/ml/retrain")
     public ResponseEntity<Map<String, String>> mlRetrain() {
         mlClient.startTrainAsync()
+                .publishOn(Schedulers.boundedElastic())  // blocking 허용 스레드로 전환
                 .doOnSuccess(v -> {
                     log.info("[Admin] /train 완료 — 스냅샷 저장 시도");
                     try {

@@ -1,6 +1,7 @@
 package com.axiom.strategy.client;
 
 import com.axiom.strategy.dto.CandleDto;
+import com.axiom.strategy.dto.InvestorFlowDto;
 import com.axiom.strategy.dto.MinuteCandleDto;
 import com.axiom.strategy.dto.StockPriceDto;
 import lombok.RequiredArgsConstructor;
@@ -119,6 +120,40 @@ public class MarketClient {
         } catch (Exception e) {
             log.error("[MarketClient] 지수 캔들 조회 실패 - indexCode: {}, error: {}", indexCode, e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * 과거 N일 투자자 매매 데이터 조회 (ML rolling 피처용).
+     * 실패 시 빈 리스트 반환 → investor 피처가 0.0으로 채워질 뿐 전략 중단 없음.
+     */
+    public List<InvestorFlowDto> getInvestorFlows(String ticker, int days) {
+        try {
+            return marketWebClient.get()
+                    .uri("/api/stocks/{ticker}/investor-flows?days={days}", ticker, days)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<List<InvestorFlowDto>>() {})
+                    .block();
+        } catch (Exception e) {
+            log.warn("[MarketClient] 투자자 과거 조회 실패 - ticker: {}, error: {}", ticker, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 당일 실시간 투자자 매매 데이터 조회 (ML today 피처용, 5분 TTL 캐시 적용됨).
+     * 실패 또는 장 전 호출 시 null 반환 → today 피처가 0.0으로 채워짐.
+     */
+    public InvestorFlowDto getTodayInvestorFlow(String ticker) {
+        try {
+            return marketWebClient.get()
+                    .uri("/api/stocks/{ticker}/investor-flows/today", ticker)
+                    .retrieve()
+                    .bodyToMono(InvestorFlowDto.class)
+                    .block();
+        } catch (Exception e) {
+            log.warn("[MarketClient] 투자자 당일 조회 실패 - ticker: {}, error: {}", ticker, e.getMessage());
+            return null;
         }
     }
 }

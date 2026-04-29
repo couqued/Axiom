@@ -36,6 +36,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -995,7 +996,8 @@ public class StrategyEngine {
             try {
                 List<CandleDto> candles = marketClient.getCandles(ticker, candleDays);
                 if (candles == null || candles.isEmpty()) continue;
-                TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, marketBreadth);
+                TradePlanDto plan = mlClient.predict(ticker, candles, indexCandles, marketBreadth,
+                        Collections.emptyList(), null);
                 if (plan == null) continue;
 
                 String name = tickerNames.getOrDefault(ticker, ticker);

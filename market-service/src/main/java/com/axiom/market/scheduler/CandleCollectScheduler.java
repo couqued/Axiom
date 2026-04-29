@@ -1,6 +1,7 @@
 package com.axiom.market.scheduler;
 
 import com.axiom.market.service.CandleService;
+import com.axiom.market.service.InvestorFlowService;
 import com.axiom.market.service.StockScreenerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,16 +17,17 @@ import java.util.List;
 public class CandleCollectScheduler {
 
     private final CandleService candleService;
+    private final InvestorFlowService investorFlowService;
     private final StockScreenerService stockScreenerService;
 
     /**
-     * 매일 15:40 KST 장 종료 후 당일 일봉 수집.
+     * 매일 15:40 KST 장 종료 후 당일 일봉 + 투자자 데이터 수집.
      */
     @Scheduled(cron = "0 40 15 * * MON-FRI", zone = "Asia/Seoul")
     public void collectDailyCandles() {
         LocalDate today = LocalDate.now();
         List<String> tickers = stockScreenerService.getScreenedTickers();
-        log.info("[Scheduler] 일봉 수집 시작 - date: {}, tickers: {}개", today, tickers.size());
+        log.info("[Scheduler] 일봉+투자자 수집 시작 - date: {}, tickers: {}개", today, tickers.size());
 
         for (String ticker : tickers) {
             try {
@@ -33,8 +35,13 @@ public class CandleCollectScheduler {
             } catch (Exception e) {
                 log.error("[Scheduler] 일봉 수집 실패 - ticker: {}, error: {}", ticker, e.getMessage());
             }
+            try {
+                investorFlowService.collectFlow(ticker, today);
+            } catch (Exception e) {
+                log.error("[Scheduler] 투자자 수집 실패 - ticker: {}, error: {}", ticker, e.getMessage());
+            }
         }
 
-        log.info("[Scheduler] 일봉 수집 완료 - date: {}", today);
+        log.info("[Scheduler] 일봉+투자자 수집 완료 - date: {}", today);
     }
 }
