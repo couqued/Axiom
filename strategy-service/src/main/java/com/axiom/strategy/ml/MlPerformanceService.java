@@ -58,7 +58,7 @@ public class MlPerformanceService {
                 .map(MlModelSnapshot::getTrainedAt)
                 .orElse(null);
 
-        boolean isWin = "ML TP".equals(tag);
+        boolean isWin = actualReturn > 0;
 
         MlTradeResult result = MlTradeResult.builder()
                 .ticker(ticker)
