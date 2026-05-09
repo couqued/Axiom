@@ -84,6 +84,7 @@ class TradePlanResponse(BaseModel):
 _global_cache: dict[str, pd.DataFrame] = {}
 _global_cache_ts: float = 0.0
 _global_lock = threading.Lock()
+_train_lock = asyncio.Lock()
 
 
 def _fetch_global_data() -> dict[str, pd.DataFrame]:
@@ -189,12 +190,15 @@ def predict_batch(req: BatchPredictRequest):
 
 @app.post("/train")
 async def train():
-    try:
-        meta = await _train_all()
-        return {"status": "ok", "meta": meta}
-    except Exception as e:
-        log.exception("학습 실패")
-        raise HTTPException(status_code=500, detail=str(e))
+    if _train_lock.locked():
+        return {"status": "already_running", "message": "이미 학습 중입니다."}
+    async with _train_lock:
+        try:
+            meta = await _train_all()
+            return {"status": "ok", "meta": meta}
+        except Exception as e:
+            log.exception("학습 실패")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── 추론 ────────────────────────────────────────────────────────────────────

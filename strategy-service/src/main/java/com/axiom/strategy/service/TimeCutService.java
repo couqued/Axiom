@@ -172,6 +172,10 @@ public class TimeCutService {
                             ticker, position.getQuantity(), result.success());
                     slackNotifier.sendTimeCut(
                             ticker, position.getStockName(), currentPrice, elapsed, maxDays, result.success());
+                    if (result.success()) {
+                        stateStore.removeBuyStage(ticker);
+                        stateStore.removeEntryTag(ticker);
+                    }
                     return result.success();
                 })
                 .orElse(false);

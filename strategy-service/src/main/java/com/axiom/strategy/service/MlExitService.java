@@ -14,6 +14,7 @@ import com.axiom.strategy.dto.StockPriceDto;
 import com.axiom.strategy.dto.TradePlanDto;
 import com.axiom.strategy.ml.MlPerformanceService;
 import com.axiom.strategy.notification.SlackNotifier;
+import com.axiom.strategy.persistence.StrategyStateStore;
 import com.axiom.strategy.util.TradingCalendar;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -57,6 +58,7 @@ public class MlExitService {
     private final TrailingStopService trailingStopService;
     private final MlDeferTracker deferTracker;
     private final MlPerformanceService mlPerformanceService;
+    private final StrategyStateStore strategyStateStore;
 
     /**
      * 5분 주기로 ML 활성 포지션 검사.
@@ -193,6 +195,8 @@ public class MlExitService {
             trailingStopService.removePeak(ticker);
             dailySellBlockService.markSoldToday(ticker);
             deferTracker.clear(ticker);
+            strategyStateStore.removeBuyStage(ticker);
+            strategyStateStore.removeEntryTag(ticker);
             log.info("[MlExit] {} 청산 완료 — ticker: {}, current: {}", tag, ticker, current);
         } else {
             log.warn("[MlExit] {} 청산 실패 — ticker: {}, error: {}", tag, ticker, result.errorMsg());

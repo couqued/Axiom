@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping
@@ -32,5 +34,17 @@ public class PortfolioController {
     public ResponseEntity<Void> deleteByTicker(@RequestParam String ticker) {
         portfolioService.deletePosition(ticker);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 활성 보유 포지션의 ticker 집합 반환 (서비스 간 내부 호출용).
+     * GET /internal/positions/tickers
+     */
+    @GetMapping("/internal/positions/tickers")
+    public ResponseEntity<Set<String>> getActiveTickers() {
+        Set<String> tickers = portfolioService.getAll().stream()
+                .map(PortfolioItemDto::getTicker)
+                .collect(Collectors.toSet());
+        return ResponseEntity.ok(tickers);
     }
 }

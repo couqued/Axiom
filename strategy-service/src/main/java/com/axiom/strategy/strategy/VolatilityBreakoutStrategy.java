@@ -3,6 +3,7 @@ package com.axiom.strategy.strategy;
 import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.persistence.StrategyStateStore;
+import com.axiom.strategy.service.EntryQualityEvaluator;
 import com.axiom.strategy.util.TradingCalendar;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -29,11 +30,14 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class VolatilityBreakoutStrategy implements TradingStrategy {
 
-    private static final double K            = 0.4;
-    private static final double BREAKOUT_CAP = 3.0;
-    private static final double VOL_CAP      = 2.0;
+    private static final double K                  = 0.4;
+    private static final double BREAKOUT_CAP       = 3.0;
+    private static final double VOL_CAP            = 2.0;
+    /** 목표가 대비 진입 허용 슬리피지 — 0.5%. 목표가를 이미 한참 초과해 추격 매수가 되는 케이스 차단. */
+    private static final double ENTRY_SLIPPAGE_CAP = 0.005;
 
     private final StrategyStateStore stateStore;
+    private final EntryQualityEvaluator entryQualityEvaluator;
 
     /** 당일 매수 종목 추적: ticker → 매수일. ForceExitScheduler에서도 참조. */
     private final Map<String, LocalDate> todayBought = new ConcurrentHashMap<>();
@@ -91,13 +95,28 @@ public class VolatilityBreakoutStrategy implements TradingStrategy {
         }
 
         if (currentPrice.compareTo(targetPrice) >= 0) {
+            // 갭업/FOMO 가드 (장초반 과열 구간 차단)
+            double quality = entryQualityEvaluator.evaluate(ticker, currentPrice, candles);
+            if (quality < 0) {
+                return hold(ticker, currentPrice, "EntryQuality 가드 — 갭업/FOMO 과열 구간 진입 차단");
+            }
+
+            // 목표가 대비 슬리피지 캡 (목표가를 이미 0.5% 이상 초과 → 추격 매수)
             double breakoutPct = currentPrice.subtract(targetPrice)
                     .divide(targetPrice, 6, RoundingMode.HALF_UP)
                     .doubleValue() * 100;
+            if (breakoutPct > ENTRY_SLIPPAGE_CAP * 100) {
+                return hold(ticker, currentPrice, String.format(
+                        "추격 매수 차단 — 목표가(%.0f) 대비 +%.2f%% (허용 +%.1f%%)",
+                        targetPrice.doubleValue(), breakoutPct, ENTRY_SLIPPAGE_CAP * 100));
+            }
+
             double avgVol  = avgVolume(candles);
             double volRatio = avgVol > 0 ? today.getVolume() / avgVol : 1.0;
-            double score = Math.min(breakoutPct / BREAKOUT_CAP, 1.0) * 50
-                         + Math.min(volRatio    / VOL_CAP,        1.0) * 50;
+            // score 역전: 목표가에 가까울수록 ↑ (꼭지 추격이 만점이던 기존 공식 폐지)
+            double proximity = Math.max(1.0 - breakoutPct / BREAKOUT_CAP, 0.0) * 50;
+            double volume   = Math.min(volRatio / VOL_CAP, 1.0) * 50;
+            double score    = proximity + volume;
 
             return SignalDto.builder()
                     .action(SignalDto.Action.BUY)

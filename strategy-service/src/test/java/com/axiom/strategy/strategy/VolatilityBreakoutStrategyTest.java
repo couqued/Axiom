@@ -4,16 +4,22 @@ import com.axiom.strategy.dto.CandleDto;
 import com.axiom.strategy.dto.SignalDto;
 import com.axiom.strategy.fixture.CandleFixture;
 import com.axiom.strategy.persistence.StrategyStateStore;
+import com.axiom.strategy.service.EntryQualityEvaluator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -22,12 +28,17 @@ class VolatilityBreakoutStrategyTest {
     @Mock
     private StrategyStateStore stateStore;
 
+    @Mock
+    private EntryQualityEvaluator entryQualityEvaluator;
+
     private VolatilityBreakoutStrategy strategy;
 
     @BeforeEach
     void setUp() {
         when(stateStore.loadAllTodayBought()).thenReturn(Collections.emptyMap());
-        strategy = new VolatilityBreakoutStrategy(stateStore);
+        lenient().when(entryQualityEvaluator.evaluate(anyString(), any(BigDecimal.class), anyList()))
+                .thenReturn(1.0);
+        strategy = new VolatilityBreakoutStrategy(stateStore, entryQualityEvaluator);
         strategy.initFromDb();
     }
 

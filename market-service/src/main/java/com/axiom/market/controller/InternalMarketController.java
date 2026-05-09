@@ -3,6 +3,7 @@ package com.axiom.market.controller;
 import com.axiom.market.repository.DailyCandleRepository;
 import com.axiom.market.service.InvestorFlowService;
 import com.axiom.market.service.StockScreenerService;
+import com.axiom.market.service.WatchlistService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,13 +28,21 @@ public class InternalMarketController {
     private final StockScreenerService   stockScreenerService;
     private final DailyCandleRepository  dailyCandleRepository;
     private final InvestorFlowService    investorFlowService;
+    private final WatchlistService       watchlistService;
 
     /**
      * 코스피200 + 코스닥150 스크리닝 종목 목록 반환 (strategy-service 호출용).
      * GET /internal/screened-tickers
+     *
+     * Phase 1+: DB(market.watch_tickers ACTIVE) 우선. 비어있으면 JSON fallback.
      */
     @GetMapping("/screened-tickers")
     public List<String> getScreenedTickers() {
+        List<String> dbTickers = watchlistService.loadActiveTickers();
+        if (dbTickers != null && !dbTickers.isEmpty()) {
+            return dbTickers;
+        }
+        log.warn("[Internal] DB watchlist 비어있음 — JSON fallback");
         return stockScreenerService.getScreenedTickers();
     }
 
@@ -43,6 +52,10 @@ public class InternalMarketController {
      */
     @GetMapping("/ticker-names")
     public Map<String, String> getTickerNames() {
+        Map<String, String> dbNames = watchlistService.loadActiveTickerNames();
+        if (dbNames != null && !dbNames.isEmpty()) {
+            return dbNames;
+        }
         return stockScreenerService.getTickerNames();
     }
 

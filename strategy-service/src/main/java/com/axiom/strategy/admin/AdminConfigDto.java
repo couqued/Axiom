@@ -15,5 +15,9 @@ public record AdminConfigDto(
         Double mlBuyThreshold,
         Boolean mlEntryTimingEnabled,
         Boolean mlPaused,
-        Boolean mlSellPaused
+        Boolean mlSellPaused,
+        // VolBreakout 전용 매도 보강 설정 (0=비활성)
+        Double volBreakoutTakeProfitPct,
+        Double volBreakoutStopLossPct,
+        Double volBreakoutIntradayTrailingPct
 ) {}

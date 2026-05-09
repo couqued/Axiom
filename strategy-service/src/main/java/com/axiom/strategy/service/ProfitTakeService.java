@@ -37,6 +37,7 @@ public class ProfitTakeService {
     private final TimeCutService timeCutService;
     private final TrailingStopService trailingStopService;
     private final VolatilityBreakoutStrategy volatilityBreakoutStrategy;
+    private final VolBreakoutExitService volBreakoutExitService;
     private final BollingerReserveService bollingerReserveService;
 
     public void check(String ticker, BigDecimal currentPrice, List<PortfolioItemDto> positions) {
@@ -104,6 +105,7 @@ public class ProfitTakeService {
             stateStore.removeBuyStage(ticker);
             stateStore.removeEntryTag(ticker);
             volatilityBreakoutStrategy.removeTodayBought(ticker);
+            volBreakoutExitService.clearPeak(ticker);
             bollingerReserveService.clear(ticker);
         }
     }

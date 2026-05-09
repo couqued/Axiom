@@ -260,13 +260,107 @@ exitOvernightPositions() — cron: 0 5 9 * * MON-FRI
   ⑤ 처리 완료 후 todayBought에서 제거
 ```
 
-> 09:00 정각은 시초가 호가 스프레드가 넓어 체결이 불안정하므로 09:05에 실행합니다.
 
 ### K 값 (0.5)의 의미
 
 - K=0.5: 전일 변동폭의 절반 이상 상승 시 매수
 - K가 클수록 필터 강함(진입 어려움), K가 작을수록 진입 쉬움
 - 국내 대형주 기준 0.5가 일반적으로 사용됨
+
+### 진입 품질 가드 (EntryQualityEvaluator)
+
+변동성 돌파 조건을 충족하더라도 아래 두 가드에 걸리면 진입을 차단합니다.
+
+| 가드 | 조건 | 적용 시간 | 처리 |
+|------|------|---------|------|
+| 갭업 가드 | 전일 종가 대비 +2% 이상 갭업 | 09:15 이전 | HOLD (진입 차단) |
+| FOMO 가드 | 당일 시가 대비 +2% 이상 상승 | 10:30 이전 | HOLD (진입 차단) |
+
+ML 전략에서 이미 사용하던 `EntryQualityEvaluator`를 공유합니다.
+
+### 슬리피지 캡 (추격 매수 차단)
+
+목표가 돌파 이후 가격이 너무 멀리 올라간 경우 진입하지 않습니다.
+
+```
+breakoutPct = (현재가 - 목표가) / 목표가 × 100
+
+breakoutPct > 0.5% → 진입 차단 (HOLD)
+breakoutPct ≤ 0.5% → 정상 진입
+```
+
+목표가 직후 진입 = 유리한 매수, 뒤늦은 추격 = 차단.
+
+### 점수 계산 역전 (목표가 근접도 우선)
+
+이전에는 돌파 폭이 클수록 score가 높았으나, 이는 FOMO 추격을 유발했습니다.  
+현재는 **목표가에 가까울수록** score가 높아지도록 역전되었습니다.
+
+```
+breakoutPct = (현재가 - 목표가) / 목표가 × 100
+volRatio    = 오늘거래량 / 최근20일평균거래량
+
+proximity = max(1.0 - breakoutPct / 2.0, 0.0) × 50   ← 목표가 근접 = 최대 50점
+volume    = min(volRatio / 3.0, 1.0) × 50             ← 거래량 급증 = 최대 50점
+score     = proximity + volume
+```
+
+| 예시 | breakoutPct | proximity 점수 |
+|------|-------------|----------------|
+| 목표가에서 +0.1% (이상적) | 0.1% | ≈ 47.5점 |
+| 목표가에서 +0.5% (캡 한계) | 0.5% | ≈ 37.5점 |
+| 이전 방식: 목표가에서 +2% | 2.0% | 50점 (높음 → 문제) |
+
+### 매도 보강 — VolBreakoutExitService
+
+당일 매수 포지션을 15:19 강제 청산에만 의존하지 않고, 3가지 실시간 청산 조건을 추가합니다.  
+`entryTag = "volatility-breakout"` 포지션에만 적용됩니다.
+
+| 청산 조건 | 기준 | Slack |
+|---------|------|-------|
+| **TP (익절)** | 현재가 ≥ 평균매수가 × (1 + volBreakoutTakeProfitPct%) | 💰 [변동성돌파 익절] |
+| **SL (손절)** | 현재가 ≤ 평균매수가 × (1 - volBreakoutStopLossPct%) | 🛑 [변동성돌파 손절] |
+| **장중 트레일링** | 장중 고점이 평균매수가 초과한 상태에서 현재가 ≤ 장중고점 × (1 - volBreakoutIntradayTrailingPct%) | 📉 [변동성돌파 트레일] |
+
+```
+TrailingStopScheduler (1분 주기) → VolBreakoutExitService.check()
+  ↓
+① TP 체크:  currentPrice ≥ avgPrice × (1 + tpPct/100) → 즉시 매도
+② SL 체크:  currentPrice ≤ avgPrice × (1 - slPct/100) → 즉시 매도
+③ 장중 트레일링 (수익 구간에서만 동작):
+    intradayPeak 갱신 (max(peak, currentPrice))
+    peak > avgPrice 인 경우에만:
+      trailLine = peak × (1 - trailingPct/100)
+      currentPrice ≤ trailLine → 즉시 매도
+```
+
+> TP/SL/Trailing 중 하나라도 발동 시 나머지는 스킵됩니다.  
+> 세 값 모두 Admin 패널에서 런타임 변경 가능. 0 입력 시 해당 조건 비활성화.
+
+### 단계적 강제 청산 (14:30 / 15:00)
+
+장 마감 전에 손실 또는 소폭 수익 포지션을 조기 청산합니다.
+
+#### 14:30 손실 청산
+
+```
+steppedExitLossCut() — cron: 0 30 14 * * MON-FRI
+  → 변동성 돌파 당일 매수 포지션 전체 점검
+  → P&L ≤ -1.0% 종목만 즉시 매도
+  → closeReason: "VOL_STEPPED_14_30"
+```
+
+#### 15:00 횡보 청산
+
+```
+steppedExitFlat() — cron: 0 0 15 * * MON-FRI
+  → 변동성 돌파 당일 매수 포지션 전체 점검 (14:30에 청산되지 않은 종목)
+  → P&L ≤ +0.3% 종목 (횡보 또는 손실) 즉시 매도
+  → closeReason: "VOL_STEPPED_15_00"
+```
+
+> 두 단계 모두 당일 처음 1회만 실행됩니다 (`steppedExitDate` 맵으로 중복 방지).  
+> 15:19 강제 청산은 여전히 동작하며, 이 두 단계에서 청산되지 않은 잔여 포지션을 최종 처리합니다.
 
 ---
 
@@ -625,7 +719,9 @@ Admin UI → "지수 하락 매수차단 (%)" → `0` 입력 → 설정 저장
 | `0 * 9-15 * * MON-FRI` | `TrailingStopScheduler` | 보유 종목 트레일링 스탑 1분 단독 체크 (09:00~15:19) | — (발동 시만 🛑 알림) |
 | `0 0 10-15 * * MON-FRI` | `StrategyScheduler` | 직전 1시간 실행 요약 Slack 발송 | 🕐 시간별 요약 |
 | `0 22 15 * * MON-FRI` | `StrategyScheduler` | 15시대 실행 요약 Slack 발송 | 🕐 시간별 요약 (15시) |
-| `0 19 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 청산 | 🔔 종목별 개별 알림 |
+| `0 30 14 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 손실 조기 청산 (P&L ≤ -1%) | 🔔 종목별 개별 알림 |
+| `0 0 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 포지션 횡보 조기 청산 (P&L ≤ +0.3%) | 🔔 종목별 개별 알림 |
+| `0 19 15 * * MON-FRI` | `ForceExitScheduler` | 변동성 돌파 당일 매수 포지션 마감 강제 청산 | 🔔 종목별 개별 알림 |
 | `0 25 15 * * MON-FRI` | `DailySummaryCollector` | 전략 실행 일일 요약 발송 + 카운터 초기화 | 📊 일일 요약 (실행횟수·매수·매도·스킵 종목 포함) |
 | `0 40 15 * * MON-FRI` | `CandleCollectScheduler` (market-service) | 당일 일봉 수집 및 DB 저장 (mock 모드 시 스킵) | — |
 
@@ -752,6 +848,11 @@ GET http://localhost:8084/api/strategy/admin/status
 | 변동성 돌파 일일 매수 한도 | `settings.volatilityBreakoutDailyLimit` | `4` | 다음 5분 사이클 |
 | 골든크로스 일일 매수 한도 | `settings.goldenCrossDailyLimit` | `4` | 다음 5분 사이클 |
 | 볼린저 일일 매수 한도 | `settings.bollingerDailyLimit` | `4` | 다음 5분 사이클 |
+| 변동성돌파 익절 비율 | `settings.volBreakoutTakeProfitPct` | `3.0` | 다음 1분 사이클 |
+| 변동성돌파 손절 비율 | `settings.volBreakoutStopLossPct` | `2.0` | 다음 1분 사이클 |
+| 변동성돌파 장중 트레일링 % | `settings.volBreakoutIntradayTrailingPct` | `1.5` | 다음 1분 사이클 |
+
+> 익절/손절/트레일링 세 항목은 Admin 패널 "변동성 돌파 — 매도 보강" 섹션에서 런타임 변경 가능. 0 입력 시 비활성화.
 
 > **`strategyMode`**: `"market-based"` — 시장 상태(BULLISH/SIDEWAYS)에 따라 전략 자동 선택 / `"all-strategies"` — 시장 상태 무관하게 활성화된 전략 전체 실행
 
@@ -977,7 +1078,9 @@ private double score; // BUY 신호 강도 점수 (0~100). SELL/HOLD = 0
 변동성 돌파 score:
   breakoutPct = (현재가 - 목표가) / 목표가 × 100
   volRatio    = 오늘거래량 / 최근20일평균거래량
-  score = min(breakoutPct/2, 1) × 50 + min(volRatio/3, 1) × 50
+  proximity = max(1.0 - breakoutPct/2.0, 0.0) × 50   ← 목표가 근접 우선 (역전됨)
+  volume    = min(volRatio/3, 1) × 50
+  score = proximity + volume
 
 골든크로스 score:
   maGapPct = (MA5 - MA20) / MA20 × 100

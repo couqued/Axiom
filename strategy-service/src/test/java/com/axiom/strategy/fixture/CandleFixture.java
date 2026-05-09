@@ -118,29 +118,28 @@ public class CandleFixture {
 
     /**
      * 변동성 돌파 시나리오 (3개 캔들): 목표가 돌파 → BUY
-     * - 어제: high=110, low=90, range=20
-     * - 오늘: open=105, close=120 → target=115, close >= target ✓
+     * - 어제: high=11000, low=9000, range=2000
+     * - 오늘: open=10500, target = 10500 + 2000*0.4 = 11300, close=11320 → +0.18% (슬리피지 캡 +0.5% 통과)
      * 당일 캔들의 tradeDate = LocalDate.now() (markBought()와 날짜 일치)
      */
     public static List<CandleDto> volatilityBreakoutBuyCandles(String ticker) {
         LocalDate today = LocalDate.now();
         return List.of(
-            candle(ticker, today.minusDays(2), 100),
+            candle(ticker, today.minusDays(2), 10000),
             CandleDto.builder()
                 .tradeDate(today.minusDays(1))
-                .openPrice(BigDecimal.valueOf(100))
-                .highPrice(BigDecimal.valueOf(110))
-                .lowPrice(BigDecimal.valueOf(90))
-                .closePrice(BigDecimal.valueOf(100))
+                .openPrice(BigDecimal.valueOf(10000))
+                .highPrice(BigDecimal.valueOf(11000))
+                .lowPrice(BigDecimal.valueOf(9000))
+                .closePrice(BigDecimal.valueOf(10500))
                 .volume(1_000_000L)
                 .build(),
-            // 당일: target = 105 + 20*0.5 = 115, close=120 >= 115 → BUY
             CandleDto.builder()
                 .tradeDate(today)
-                .openPrice(BigDecimal.valueOf(105))
-                .highPrice(BigDecimal.valueOf(125))
-                .lowPrice(BigDecimal.valueOf(105))
-                .closePrice(BigDecimal.valueOf(120))
+                .openPrice(BigDecimal.valueOf(10500))
+                .highPrice(BigDecimal.valueOf(11400))
+                .lowPrice(BigDecimal.valueOf(10500))
+                .closePrice(BigDecimal.valueOf(11320))
                 .volume(2_000_000L)
                 .build()
         );
@@ -148,28 +147,27 @@ public class CandleFixture {
 
     /**
      * 변동성 돌파 시나리오 (3개 캔들): 목표가 미달 → HOLD
-     * - 어제: high=110, low=90, range=20
-     * - 오늘: open=105, close=108 → target=115, close < target ✓
+     * - 어제: high=11000, low=9000, range=2000
+     * - 오늘: open=10500, target=11300, close=10800 < target → HOLD
      */
     public static List<CandleDto> volatilityBreakoutHoldCandles(String ticker) {
         LocalDate today = LocalDate.now();
         return List.of(
-            candle(ticker, today.minusDays(2), 100),
+            candle(ticker, today.minusDays(2), 10000),
             CandleDto.builder()
                 .tradeDate(today.minusDays(1))
-                .openPrice(BigDecimal.valueOf(100))
-                .highPrice(BigDecimal.valueOf(110))
-                .lowPrice(BigDecimal.valueOf(90))
-                .closePrice(BigDecimal.valueOf(100))
+                .openPrice(BigDecimal.valueOf(10000))
+                .highPrice(BigDecimal.valueOf(11000))
+                .lowPrice(BigDecimal.valueOf(9000))
+                .closePrice(BigDecimal.valueOf(10500))
                 .volume(1_000_000L)
                 .build(),
-            // target = 105 + 20*0.5 = 115, close=108 < 115 → HOLD
             CandleDto.builder()
                 .tradeDate(today)
-                .openPrice(BigDecimal.valueOf(105))
-                .highPrice(BigDecimal.valueOf(112))
-                .lowPrice(BigDecimal.valueOf(105))
-                .closePrice(BigDecimal.valueOf(108))
+                .openPrice(BigDecimal.valueOf(10500))
+                .highPrice(BigDecimal.valueOf(11200))
+                .lowPrice(BigDecimal.valueOf(10500))
+                .closePrice(BigDecimal.valueOf(10800))
                 .volume(800_000L)
                 .build()
         );

@@ -158,3 +158,37 @@ export const getMlTradeHistory = (page = 0, size = 20) =>
 // ML 성과 — 확신도 구간별 통계
 export const getMlConfidenceTiers = () =>
   request('/api/strategy/ml-performance/confidence-tiers')
+
+// 워치리스트 관리
+export const getWatchlist = () =>
+  request('/api/strategy/admin/watchlist')
+
+export const getWatchlistCounts = () =>
+  request('/api/strategy/admin/watchlist/counts')
+
+export const syncWatchlist = () =>
+  request('/api/strategy/admin/watchlist/sync', { method: 'POST' })
+
+export const excludeTicker = (ticker, reason) =>
+  request(`/api/strategy/admin/watchlist/${ticker}/exclude`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+
+export const restoreTicker = (ticker) =>
+  request(`/api/strategy/admin/watchlist/${ticker}/exclude`, { method: 'DELETE' })
+
+export const addWatchTicker = (ticker, stockName, marketIndex) =>
+  request(`/api/strategy/admin/watchlist/${ticker}/add`, {
+    method: 'POST',
+    body: JSON.stringify({ stockName, marketIndex }),
+  })
+
+export const runDailyWatchReview = () =>
+  request('/api/strategy/admin/watchlist/review/daily', { method: 'POST' })
+
+export const runWeeklyWatchReview = () =>
+  request('/api/strategy/admin/watchlist/review/weekly', { method: 'POST' })
+
+export const runQuarterlyWatchReview = () =>
+  request('/api/strategy/admin/watchlist/review/quarterly', { method: 'POST' })

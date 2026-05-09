@@ -23,7 +23,10 @@ public record AdminStatusDto(
             double mlBuyThreshold,
             boolean mlEntryTimingEnabled,
             boolean mlPaused,
-            boolean mlSellPaused
+            boolean mlSellPaused,
+            double volBreakoutTakeProfitPct,
+            double volBreakoutStopLossPct,
+            double volBreakoutIntradayTrailingPct
     ) {}
 
     // Backward-compat accessors

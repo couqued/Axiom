@@ -6,6 +6,7 @@ import com.axiom.market.entity.InvestorFlow;
 import com.axiom.market.repository.InvestorFlowRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -46,7 +47,6 @@ public class InvestorFlowService {
      * ticker의 최근 days일치 투자자 데이터 반환.
      * DB에 없는 구간은 KIS API에서 가져와 저장 후 반환.
      */
-    @Transactional
     public List<InvestorFlowDto> getFlows(String ticker, int days) {
         LocalDate today = LocalDate.now();
         LocalDate from  = today.minusDays(days + 30L);
@@ -75,8 +75,13 @@ public class InvestorFlowService {
                             .filter(f -> !existing.contains(f.getTradeDate()))
                             .toList();
                     if (!toSave.isEmpty()) {
-                        flowRepository.saveAll(toSave);
-                        toSave.forEach(f -> existing.add(f.getTradeDate()));
+                        try {
+                            flowRepository.saveAll(toSave);
+                            toSave.forEach(f -> existing.add(f.getTradeDate()));
+                        } catch (DataIntegrityViolationException e) {
+                            log.debug("[Flow] 동시 삽입 무시 - ticker: {}, count: {}", ticker, toSave.size());
+                            toSave.forEach(f -> existing.add(f.getTradeDate()));
+                        }
                     }
                 }
                 chunkStart = chunkEnd.plusDays(1);

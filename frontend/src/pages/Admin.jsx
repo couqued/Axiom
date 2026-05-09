@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getAdminStatus, pauseTrading, resumeTrading, pauseSellTrading, resumeSellTrading, pauseMlTrading, resumeMlTrading, pauseMlSellTrading, resumeMlSellTrading, updateAdminConfig, manualExit, markSold } from '../api/stockApi'
+import { getAdminStatus, pauseTrading, resumeTrading, pauseSellTrading, resumeSellTrading, pauseMlTrading, resumeMlTrading, pauseMlSellTrading, resumeMlSellTrading, updateAdminConfig, manualExit, markSold, getWatchlist, getWatchlistCounts, syncWatchlist, excludeTicker, restoreTicker, addWatchTicker, runDailyWatchReview, runWeeklyWatchReview, runQuarterlyWatchReview } from '../api/stockApi'
 
 export default function Admin({ onClose, onConfigUpdated }) {
   const [status, setStatus] = useState(null)
@@ -21,10 +21,23 @@ export default function Admin({ onClose, onConfigUpdated }) {
   const [markResult, setMarkResult] = useState(null)
   const [marking, setMarking] = useState(false)
 
+  const [watchlist, setWatchlist] = useState([])
+  const [watchCounts, setWatchCounts] = useState({})
+  const [watchLoading, setWatchLoading] = useState(false)
+  const [watchFilter, setWatchFilter] = useState('ALL')
+  const [watchSearch, setWatchSearch] = useState('')
+  const [watchSyncing, setWatchSyncing] = useState(false)
+  const [watchActing, setWatchActing] = useState(null)
+  const [watchMsg, setWatchMsg] = useState(null)
+  const [addTicker, setAddTicker] = useState('')
+  const [addName, setAddName] = useState('')
+  const [addIndex, setAddIndex] = useState('MANUAL')
+
   const [fields, setFields] = useState({
     invest: '', maxPos: '', trailing: '', profitTake: '', timeCut: '', indexDrop: '',
     volBreakoutDaily: '', goldenCrossDaily: '', bollingerDaily: '',
     mlDaily: '', mlThreshold: '', mlEntryTiming: true,
+    volTakeProfit: '', volStopLoss: '', volIntradayTrailing: '',
   })
 
   const initFields = (s) => ({
@@ -40,6 +53,9 @@ export default function Admin({ onClose, onConfigUpdated }) {
     mlDaily:          String(s.settings.mlDailyLimit ?? 0),
     mlThreshold:      String(Math.round((s.settings.mlBuyThreshold ?? 0.6) * 100)),
     mlEntryTiming:    s.settings.mlEntryTimingEnabled ?? true,
+    volTakeProfit:       String(s.settings.volBreakoutTakeProfitPct ?? 0),
+    volStopLoss:         String(s.settings.volBreakoutStopLossPct ?? 0),
+    volIntradayTrailing: String(s.settings.volBreakoutIntradayTrailingPct ?? 0),
   })
 
   useEffect(() => {
@@ -51,6 +67,111 @@ export default function Admin({ onClose, onConfigUpdated }) {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  const reloadWatchlist = async () => {
+    setWatchLoading(true)
+    try {
+      const [list, counts] = await Promise.all([getWatchlist(), getWatchlistCounts()])
+      setWatchlist(Array.isArray(list) ? list : [])
+      setWatchCounts(counts || {})
+    } catch (e) {
+      setWatchMsg({ ok: false, text: '워치리스트 로드 실패: ' + e.message })
+    } finally {
+      setWatchLoading(false)
+    }
+  }
+
+  useEffect(() => { reloadWatchlist() }, [])
+
+  const handleWatchSync = async () => {
+    setWatchSyncing(true)
+    setWatchMsg(null)
+    try {
+      const res = await syncWatchlist()
+      setWatchMsg({ ok: true, text: `동기화 완료 — added: ${res.added ?? 0}, swept: ${res.swept ?? 0}` })
+      await reloadWatchlist()
+    } catch (e) {
+      setWatchMsg({ ok: false, text: '동기화 실패: ' + e.message })
+    } finally {
+      setWatchSyncing(false)
+    }
+  }
+
+  const handleExclude = async (ticker) => {
+    const reason = window.prompt(`${ticker} 제외 사유를 입력하세요`, '')
+    if (reason === null) return
+    setWatchActing(ticker)
+    setWatchMsg(null)
+    try {
+      await excludeTicker(ticker, reason || '사유 미기재')
+      await reloadWatchlist()
+    } catch (e) {
+      setWatchMsg({ ok: false, text: '제외 실패: ' + e.message })
+    } finally {
+      setWatchActing(null)
+    }
+  }
+
+  const handleRestore = async (ticker) => {
+    setWatchActing(ticker)
+    setWatchMsg(null)
+    try {
+      await restoreTicker(ticker)
+      await reloadWatchlist()
+    } catch (e) {
+      setWatchMsg({ ok: false, text: '복원 실패: ' + e.message })
+    } finally {
+      setWatchActing(null)
+    }
+  }
+
+  const handleRunReview = async (kind) => {
+    if (kind === 'quarterly') {
+      const ok = window.confirm('분기 KRX 리밸런싱을 실행하시겠습니까?\n(KIS index endpoint 호출 — dry-run=false 시 DB 변경)')
+      if (!ok) return
+    }
+    setWatchSyncing(true)
+    setWatchMsg(null)
+    try {
+      let res
+      let label
+      if (kind === 'weekly')      { res = await runWeeklyWatchReview();    label = '주간' }
+      else if (kind === 'quarterly') { res = await runQuarterlyWatchReview(); label = '분기' }
+      else                        { res = await runDailyWatchReview();     label = '일간' }
+      if (res.error) {
+        setWatchMsg({ ok: false, text: `${label} 점검 실패 — ${res.error}` })
+      } else {
+        const mode = res.dryRun ? 'DRY RUN' : '실행'
+        const counts = kind === 'quarterly'
+          ? `편입: ${res.added ?? 0}, 편출: ${res.removed ?? 0}`
+          : `제외: ${res.excluded ?? 0}, 복귀: ${res.restored ?? 0}${res.swept != null ? `, sweep: ${res.swept}` : ''}`
+        setWatchMsg({ ok: true, text: `${label} 점검 ${mode} — ${counts}` })
+      }
+      await reloadWatchlist()
+    } catch (e) {
+      setWatchMsg({ ok: false, text: '점검 실패: ' + e.message })
+    } finally {
+      setWatchSyncing(false)
+    }
+  }
+
+  const handleAddWatchTicker = async () => {
+    const t = addTicker.trim()
+    if (!t) return
+    setWatchActing(t)
+    setWatchMsg(null)
+    try {
+      await addWatchTicker(t, addName.trim() || null, addIndex)
+      setAddTicker('')
+      setAddName('')
+      setAddIndex('MANUAL')
+      await reloadWatchlist()
+    } catch (e) {
+      setWatchMsg({ ok: false, text: '추가 실패: ' + e.message })
+    } finally {
+      setWatchActing(null)
+    }
+  }
 
   const setField = (key, val) =>
     setFields(prev => ({ ...prev, [key]: val }))
@@ -159,6 +280,15 @@ export default function Admin({ onClose, onConfigUpdated }) {
       setSaveMsg({ ok: false, text: 'ML 매수 confidence는 50~95 사이의 정수로 입력하세요' })
       return
     }
+    const volTakeProfit       = parseFloat(fields.volTakeProfit)
+    const volStopLoss         = parseFloat(fields.volStopLoss)
+    const volIntradayTrailing = parseFloat(fields.volIntradayTrailing)
+    if (isNaN(volTakeProfit) || volTakeProfit < 0
+        || isNaN(volStopLoss) || volStopLoss < 0
+        || isNaN(volIntradayTrailing) || volIntradayTrailing < 0) {
+      setSaveMsg({ ok: false, text: '변동성돌파 TP/SL/트레일링은 0 이상의 숫자를 입력하세요 (0=비활성)' })
+      return
+    }
     setSaving(true)
     setSaveMsg(null)
     try {
@@ -175,6 +305,9 @@ export default function Admin({ onClose, onConfigUpdated }) {
         mlDailyLimit: mlDaily,
         mlBuyThreshold: mlThresholdPct / 100,
         mlEntryTimingEnabled: !!fields.mlEntryTiming,
+        volBreakoutTakeProfitPct: volTakeProfit,
+        volBreakoutStopLossPct: volStopLoss,
+        volBreakoutIntradayTrailingPct: volIntradayTrailing,
       })
       setStatus(res)
       setFields(initFields(res))
@@ -346,6 +479,46 @@ export default function Admin({ onClose, onConfigUpdated }) {
                 disabled={saving}
               >
                 {saving ? '저장 중...' : '설정 저장'}
+              </button>
+              {saveMsg && (
+                <p className={`result-msg ${saveMsg.ok ? 'success' : 'fail'}`}>{saveMsg.text}</p>
+              )}
+            </div>
+
+            {/* 변동성 돌파 매도 보강 (TP/SL/일중 트레일링) */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">변동성 돌파 — 매도 보강</h3>
+              <p className="admin-note">
+                변동성 돌파 전략으로 매수한 포지션에만 적용됩니다 (다른 전략 무영향).<br/>
+                1분 주기로 진입가 대비 TP/SL, 그리고 일중 고점 대비 트레일링을 체크합니다.<br/>
+                각 값을 0으로 두면 해당 룰은 비활성화됩니다. 마감 일괄 청산(15:19)은 그대로 유지됩니다.
+              </p>
+              <div className="admin-fields">
+                {[
+                  { key: 'volTakeProfit',       label: '익절 TP (%, 0=비활성)',         min: 0, max: 30, step: 0.1 },
+                  { key: 'volStopLoss',         label: '손절 SL (%, 0=비활성)',         min: 0, max: 30, step: 0.1 },
+                  { key: 'volIntradayTrailing', label: '일중 트레일링 (%, 0=비활성)',   min: 0, max: 30, step: 0.1 },
+                ].map(({ key, label, min, max, step }) => (
+                  <label key={key} className="admin-field">
+                    <span className="admin-field-label">{label}</span>
+                    <input
+                      type="number"
+                      className="admin-input"
+                      value={fields[key]}
+                      onChange={e => setField(key, e.target.value)}
+                      min={min}
+                      max={max}
+                      step={step}
+                    />
+                  </label>
+                ))}
+              </div>
+              <button
+                className="admin-save-btn"
+                onClick={handleSaveConfig}
+                disabled={saving}
+              >
+                {saving ? '저장 중...' : '변동성 돌파 설정 저장'}
               </button>
               {saveMsg && (
                 <p className={`result-msg ${saveMsg.ok ? 'success' : 'fail'}`}>{saveMsg.text}</p>
@@ -537,12 +710,207 @@ export default function Admin({ onClose, onConfigUpdated }) {
               )}
             </div>
 
+            {/* 감시 종목 관리 */}
+            <div className="admin-section">
+              <h3 className="admin-section-title">감시 종목 관리</h3>
+              <p className="admin-note">
+                전략 평가 대상 종목 풀(KOSPI200 + KOSDAQ150). 수동 제외/복원, JSON 부트스트랩 동기화.<br/>
+                보유 중 종목 제외 시 즉시 제거되지 않고 청산 후 다음날 08:31에 자동 정리됩니다.
+              </p>
+
+              <div className="watchlist-counts">
+                <span className="watchlist-badge active">ACTIVE {watchCounts.ACTIVE ?? 0}</span>
+                <span className="watchlist-badge auto">AUTO {watchCounts.EXCLUDED_AUTO ?? 0}</span>
+                <span className="watchlist-badge manual">MANUAL {watchCounts.EXCLUDED_MANUAL ?? 0}</span>
+                <span className="watchlist-badge removed">REMOVED {watchCounts.REMOVED ?? 0}</span>
+              </div>
+
+              <div className="watchlist-action-grid">
+                <button
+                  className="watchlist-action-btn"
+                  onClick={() => handleRunReview('daily')}
+                  disabled={watchSyncing}
+                  title="거래정지/관리종목/투자위험 자동 점검"
+                >
+                  {watchSyncing ? '실행 중...' : '🔍 일간 점검'}
+                </button>
+                <button
+                  className="watchlist-action-btn"
+                  onClick={() => handleRunReview('weekly')}
+                  disabled={watchSyncing}
+                  title="시총/거래대금 임계 평가"
+                >
+                  {watchSyncing ? '실행 중...' : '📊 주간 점검'}
+                </button>
+                <button
+                  className="watchlist-action-btn"
+                  onClick={() => handleRunReview('quarterly')}
+                  disabled={watchSyncing}
+                  title="KRX 분기 정기변경 (KIS index endpoint, 6/1·12/1 cron)"
+                >
+                  {watchSyncing ? '실행 중...' : '🔄 분기 리밸런싱'}
+                </button>
+                <button
+                  className="watchlist-action-btn"
+                  onClick={handleWatchSync}
+                  disabled={watchSyncing}
+                  title="stock-universe.json 부트스트랩 + 보류 sweep"
+                >
+                  {watchSyncing ? '동기화 중...' : '📥 JSON 동기화'}
+                </button>
+              </div>
+
+              <div className="watchlist-add-row">
+                <input
+                  type="text"
+                  className="admin-input"
+                  placeholder="종목코드"
+                  value={addTicker}
+                  onChange={e => setAddTicker(e.target.value)}
+                  style={{ flex: '0 0 110px' }}
+                />
+                <input
+                  type="text"
+                  className="admin-input"
+                  placeholder="종목명 (선택)"
+                  value={addName}
+                  onChange={e => setAddName(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <select
+                  className="admin-input"
+                  value={addIndex}
+                  onChange={e => setAddIndex(e.target.value)}
+                  style={{ flex: '0 0 130px' }}
+                >
+                  <option value="MANUAL">MANUAL</option>
+                  <option value="KOSPI200">KOSPI200</option>
+                  <option value="KOSDAQ150">KOSDAQ150</option>
+                </select>
+                <button
+                  className="admin-toggle-btn"
+                  onClick={handleAddWatchTicker}
+                  disabled={!addTicker.trim() || watchActing === addTicker.trim()}
+                >
+                  추가
+                </button>
+              </div>
+
+              <div className="watchlist-filter-row">
+                {['ALL', 'ACTIVE', 'EXCLUDED_AUTO', 'EXCLUDED_MANUAL', 'REMOVED'].map(f => (
+                  <button
+                    key={f}
+                    className={`watchlist-filter-btn ${watchFilter === f ? 'active' : ''}`}
+                    onClick={() => setWatchFilter(f)}
+                  >
+                    {f}
+                  </button>
+                ))}
+                <input
+                  type="text"
+                  className="admin-input"
+                  placeholder="검색 (종목코드/종목명)"
+                  value={watchSearch}
+                  onChange={e => setWatchSearch(e.target.value)}
+                  style={{ marginLeft: 'auto', flex: 1, minWidth: '120px' }}
+                />
+              </div>
+
+              {watchMsg && (
+                <p className={`result-msg ${watchMsg.ok ? 'success' : 'fail'}`}>{watchMsg.text}</p>
+              )}
+
+              {watchLoading ? (
+                <p className="admin-note">로딩 중...</p>
+              ) : (
+                (() => {
+                  const search = watchSearch.trim().toLowerCase()
+                  const filtered = watchlist.filter(w => {
+                    if (watchFilter !== 'ALL' && w.status !== watchFilter) return false
+                    if (search && !w.ticker.toLowerCase().includes(search) && !(w.stockName || '').toLowerCase().includes(search)) return false
+                    return true
+                  })
+                  if (filtered.length === 0) {
+                    return <p className="admin-note" style={{ color: '#888' }}>표시할 종목 없음</p>
+                  }
+                  return (
+                    <div className="watchlist-table-wrap">
+                      <table className="watchlist-table">
+                        <colgroup>
+                          <col className="col-stock" />
+                          <col className="col-index" />
+                          <col className="col-status" />
+                          <col className="col-reason" />
+                          <col className="col-action" />
+                        </colgroup>
+                        <thead>
+                          <tr>
+                            <th>종목</th>
+                            <th>지수</th>
+                            <th>상태</th>
+                            <th>사유</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filtered.map(w => {
+                            const isExcluded = w.status === 'EXCLUDED_MANUAL' || w.status === 'EXCLUDED_AUTO'
+                            const isPending = w.pendingRemoval
+                            return (
+                              <tr key={w.ticker}>
+                                <td>
+                                  <div className="watchlist-name">{w.stockName}</div>
+                                  <div className="watchlist-ticker">{w.ticker}</div>
+                                </td>
+                                <td>{w.marketIndex}</td>
+                                <td>
+                                  <span className={`watchlist-badge ${
+                                    w.status === 'ACTIVE' ? 'active'
+                                    : w.status === 'EXCLUDED_AUTO' ? 'auto'
+                                    : w.status === 'EXCLUDED_MANUAL' ? 'manual'
+                                    : 'removed'
+                                  }`}>
+                                    {w.status}
+                                  </span>
+                                  {isPending && <span className="watchlist-badge pending">청산대기</span>}
+                                </td>
+                                <td className="watchlist-reason" title={w.removalReason || ''}>{w.removalReason || '-'}</td>
+                                <td className="watchlist-action-cell">
+                                  {isExcluded ? (
+                                    <button
+                                      className="watchlist-row-btn restore"
+                                      disabled={watchActing === w.ticker}
+                                      onClick={() => handleRestore(w.ticker)}
+                                    >
+                                      복원
+                                    </button>
+                                  ) : (
+                                    <button
+                                      className="watchlist-row-btn exclude"
+                                      disabled={watchActing === w.ticker}
+                                      onClick={() => handleExclude(w.ticker)}
+                                    >
+                                      제외
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                })()
+              )}
+            </div>
+
             {/* 향후 추가 예정 */}
             <div className="admin-section admin-future">
               <h3 className="admin-section-title">향후 추가 예정</h3>
               <ul className="admin-future-list">
                 <li>전략별 ON/OFF</li>
-                <li>감시 종목 관리</li>
+                <li>워치리스트 dry-run 해제 토글 (Phase 2 안정화 후)</li>
               </ul>
             </div>
           </>

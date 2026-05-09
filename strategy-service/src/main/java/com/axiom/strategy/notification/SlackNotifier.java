@@ -128,6 +128,32 @@ public class SlackNotifier {
     }
 
     /**
+     * VolBreakout 전용 매도 보강 (TP / SL / 일중 트레일링) 청산 알림.
+     */
+    public void sendVolBreakoutExit(String ticker, String stockName,
+                                    BigDecimal avgPrice, BigDecimal currentPrice,
+                                    String reasonText, boolean success) {
+        double roi = 0;
+        if (avgPrice != null && avgPrice.compareTo(BigDecimal.ZERO) > 0) {
+            roi = currentPrice.subtract(avgPrice)
+                    .divide(avgPrice, 4, RoundingMode.HALF_UP)
+                    .doubleValue() * 100;
+        }
+        String emoji = reasonText.startsWith("익절") ? "💰"
+                : reasonText.startsWith("손절") ? "🛑" : "📉";
+        String text = String.format(
+                "%s *[변동성돌파 | %s]* %s\n" +
+                "> 매수가: %s원  |  매도가: %s원  |  수익률: %s%.2f%%\n" +
+                "> 주문: %s",
+                emoji, reasonText, formatStock(stockName, ticker),
+                formatPrice(avgPrice), formatPrice(currentPrice),
+                roi >= 0 ? "+" : "", roi,
+                success ? "성공" : "실패"
+        );
+        send(text);
+    }
+
+    /**
      * 마감청산 알림 (변동성 돌파 오버나이트 방지, 15:20).
      */
     public void sendForceExit(String ticker, String stockName,

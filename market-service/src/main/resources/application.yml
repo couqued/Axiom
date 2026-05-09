@@ -29,6 +29,20 @@ kis:
 candle:
   default-days: 60 # 기본 조회 일수
 
+services:
+  portfolio:
+    url: ${PORTFOLIO_SERVICE_URL:http://portfolio-service:8083}
+
+watchlist:
+  rebalance:
+    dry-run: ${WATCHLIST_DRY_RUN:true}
+    liquidity:
+      remove-threshold-krw: 5000000000   # 50억 (제거)
+      restore-threshold-krw: 10000000000  # 100억 (복귀)
+    market-cap:
+      remove-threshold-krw: 500000000000   # 5000억 (제거)
+      restore-threshold-krw: 600000000000  # 6000억 (복귀, 20% 버퍼)
+
 slack:
   webhook-url: ${SLACK_WEBHOOK_URL:PLACEHOLDER}
   enabled: ${SLACK_ENABLED:false}

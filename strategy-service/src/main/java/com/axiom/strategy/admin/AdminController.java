@@ -19,6 +19,7 @@ import com.axiom.strategy.service.DailySellBlockService;
 import com.axiom.strategy.service.MarketStateService;
 import com.axiom.strategy.service.TimeCutService;
 import com.axiom.strategy.service.TrailingStopService;
+import com.axiom.strategy.service.VolBreakoutExitService;
 import com.axiom.strategy.strategy.VolatilityBreakoutStrategy;
 
 import java.time.LocalDate;
@@ -38,6 +39,7 @@ public class AdminController {
 
     private final AdminConfigStore adminConfigStore;
     private final TrailingStopService trailingStopService;
+    private final VolBreakoutExitService volBreakoutExitService;
     private final TimeCutService timeCutService;
     private final MarketStateService marketStateService;
     private final VolatilityBreakoutStrategy volatilityBreakoutStrategy;
@@ -129,7 +131,9 @@ public class AdminController {
                 || dto.trailingStopPct() != null || dto.timeCutDays() != null || dto.indexDropBlockPct() != null
                 || dto.volatilityBreakoutDailyLimit() != null || dto.goldenCrossDailyLimit() != null
                 || dto.bollingerDailyLimit() != null || dto.profitTakePct() != null
-                || dto.mlDailyLimit() != null || dto.mlBuyThreshold() != null || dto.mlEntryTimingEnabled() != null;
+                || dto.mlDailyLimit() != null || dto.mlBuyThreshold() != null || dto.mlEntryTimingEnabled() != null
+                || dto.volBreakoutTakeProfitPct() != null || dto.volBreakoutStopLossPct() != null
+                || dto.volBreakoutIntradayTrailingPct() != null;
         if (hasSettingFields) {
             AdminConfigStore.ModeSettings current = adminConfigStore.getSettings();
 
@@ -145,9 +149,13 @@ public class AdminController {
             int     newMlDaily   = dto.mlDailyLimit()           != null ? dto.mlDailyLimit()           : current.mlDailyLimit();
             double  newMlThr     = dto.mlBuyThreshold()         != null ? dto.mlBuyThreshold()         : current.mlBuyThreshold();
             boolean newMlEntry   = dto.mlEntryTimingEnabled()   != null ? dto.mlEntryTimingEnabled()   : current.mlEntryTimingEnabled();
+            double newVolTp       = dto.volBreakoutTakeProfitPct()       != null ? dto.volBreakoutTakeProfitPct()       : current.volBreakoutTakeProfitPct();
+            double newVolSl       = dto.volBreakoutStopLossPct()         != null ? dto.volBreakoutStopLossPct()         : current.volBreakoutStopLossPct();
+            double newVolTrailing = dto.volBreakoutIntradayTrailingPct() != null ? dto.volBreakoutIntradayTrailingPct() : current.volBreakoutIntradayTrailingPct();
             adminConfigStore.setConfig(newInvest, newMaxPos, newTs, newTc, newIdx,
                     newVolDaily, newGcDaily, newBollDaily, newPtPct,
-                    newMlDaily, newMlThr, newMlEntry);
+                    newMlDaily, newMlThr, newMlEntry,
+                    newVolTp, newVolSl, newVolTrailing);
         }
 
         return ResponseEntity.ok(currentStatus());
@@ -247,6 +255,7 @@ public class AdminController {
                 strategyStateStore.removeEntryTag(ticker);
                 timeCutService.clearBuy(ticker);
                 trailingStopService.removePeak(ticker);
+                volBreakoutExitService.clearPeak(ticker);
                 bollingerReserveService.clear(ticker);
                 result.put(ticker, "OK");
             } catch (Exception e) {
@@ -268,6 +277,7 @@ public class AdminController {
                 strategyStateStore.removeEntryTag(ticker);
                 timeCutService.clearBuy(ticker);
                 trailingStopService.removePeak(ticker);
+                volBreakoutExitService.clearPeak(ticker);
                 bollingerReserveService.clear(ticker);
                 dailySellBlockService.markSoldToday(ticker);
                 result.put(ticker, "OK");
@@ -302,7 +312,10 @@ public class AdminController {
                 dailySellBlockService.markSoldToday(position.getTicker());
                 timeCutService.clearBuy(position.getTicker());
                 trailingStopService.removePeak(position.getTicker());
+                volBreakoutExitService.clearPeak(position.getTicker());
                 bollingerReserveService.clear(position.getTicker());
+                strategyStateStore.removeBuyStage(position.getTicker());
+                strategyStateStore.removeEntryTag(position.getTicker());
             }
         }
 
@@ -319,7 +332,9 @@ public class AdminController {
                         s.volatilityBreakoutDailyLimit(), s.goldenCrossDailyLimit(), s.bollingerDailyLimit(),
                         s.profitTakePct(),
                         s.mlDailyLimit(), s.mlBuyThreshold(), s.mlEntryTimingEnabled(),
-                        s.mlPaused(), s.mlSellPaused()),
+                        s.mlPaused(), s.mlSellPaused(),
+                        s.volBreakoutTakeProfitPct(), s.volBreakoutStopLossPct(),
+                        s.volBreakoutIntradayTrailingPct()),
                 marketStateService.isIndexDropBlockedToday(),
                 marketStateService.isIndexDropCheckedToday(),
                 bollingerReserveService.getAllReservations()

@@ -913,6 +913,7 @@ public class StrategyEngine {
         if (candles.size() < 21) return null;
         int endIdx = candles.size() - 1;
 
+        // 당일 MA5/MA20
         double ma5Sum = 0, ma20Sum = 0;
         for (int i = endIdx - 4; i <= endIdx; i++)
             ma5Sum += candles.get(i).getClosePrice().doubleValue();
@@ -921,18 +922,42 @@ public class StrategyEngine {
         double ma5  = ma5Sum / 5;
         double ma20 = ma20Sum / 20;
 
+        // 전일 MA5/MA20 (크로스 판단)
+        double ma5PrevSum = 0, ma20PrevSum = 0;
+        for (int i = endIdx - 5; i <= endIdx - 1; i++)
+            ma5PrevSum += candles.get(i).getClosePrice().doubleValue();
+        for (int i = endIdx - 20; i <= endIdx - 1; i++)
+            ma20PrevSum += candles.get(i).getClosePrice().doubleValue();
+        double ma5Prev  = ma5PrevSum / 5;
+        double ma20Prev = ma20PrevSum / 20;
+
         double gapPct = (ma20 - ma5) / ma20 * 100;
         double currentPrice = candles.get(endIdx).getClosePrice().doubleValue();
 
-        // 진입점수 = MA5/MA20 이격 강도(50점) + 거래량 비율(50점)
         double maGapPct = (ma5 - ma20) / ma20 * 100; // 양수 = MA5가 MA20 상회
-        double maScore = maGapPct > 0 ? Math.min(maGapPct / 2.0, 1.0) * 50 : 0; // 2% 이격 = 50점
         double avgVol = calcAvgVolume(candles, 20);
         double volRatio = avgVol > 0 ? (double) candles.get(endIdx).getVolume() / avgVol : 0;
         double volScore = Math.min(volRatio / 3.0, 1.0) * 50;
-        double score = maScore + volScore;
 
-        String detail = String.format("MA5=%.0f, MA20=%.0f, 이격=%.2f%%", ma5, ma20, maGapPct);
+        // 실제 GoldenCrossStrategy 매수 조건: 전일 MA5 ≤ MA20 AND 당일 MA5 > MA20 (당일 크로스)
+        boolean crossedToday = ma5Prev <= ma20Prev && ma5 > ma20;
+        // 이미 한참 전에 크로스(추격 영역)는 점수 0 — 실제 매수 안 됨
+        boolean alreadyCrossedTooFar = ma5 > ma20 && !crossedToday && maGapPct > 1.0;
+
+        double maScore;
+        if (alreadyCrossedTooFar) {
+            maScore = 0;
+        } else if (crossedToday) {
+            // 당일 크로스 — 이격 강도로 점수 (1% 이격 = 50점, GoldenCrossStrategy 와 동일 cap)
+            maScore = Math.min(maGapPct / 1.0, 1.0) * 50;
+        } else {
+            // 아직 안 크로스 — 근접도로 점수 (gapPct 0% 일수록 ↑, 5% 이상 떨어짐 = 0점)
+            maScore = Math.max(0, (5.0 - gapPct) / 5.0) * 50;
+        }
+        double score = (alreadyCrossedTooFar) ? 0 : maScore + volScore;
+
+        String detail = String.format("MA5=%.0f, MA20=%.0f, 이격=%.2f%%%s",
+                ma5, ma20, maGapPct, crossedToday ? " · 당일 크로스" : "");
         return new SignalGapDto(0, ticker, stockName, "golden-cross",
                 currentPrice, ma20, gapPct, -1, 0, score, detail);
     }
@@ -942,8 +967,12 @@ public class StrategyEngine {
         CandleDto today     = candles.get(candles.size() - 1);
         CandleDto yesterday = candles.get(candles.size() - 2);
 
+        // VolatilityBreakoutStrategy 와 동일한 K(0.4) / ENTRY_SLIPPAGE_CAP(0.5%) 사용
+        final double K = 0.4;
+        final double ENTRY_SLIPPAGE_CAP_PCT = 0.5;
+
         double range       = yesterday.getHighPrice().subtract(yesterday.getLowPrice()).doubleValue();
-        double targetPrice = today.getOpenPrice().doubleValue() + range * 0.5;
+        double targetPrice = today.getOpenPrice().doubleValue() + range * K;
         double currentPrice = today.getClosePrice().doubleValue();
 
         double gapPct = (targetPrice - currentPrice) / currentPrice * 100;
@@ -954,14 +983,19 @@ public class StrategyEngine {
         double volScore = Math.min(volRatio / 3.0, 1.0) * 50;          // 3배 거래량 = 50점
         double proximity;
         if (gapPct < 0) {
-            // 이미 돌파: 돌파 강도로 점수 부여 (2% 돌파 = 50점)
+            // 이미 돌파: 0~0.5% 구간만 매수 가능 (ENTRY_SLIPPAGE_CAP)
+            // 그 이상은 추격 매수로 차단되므로 점수 0
             double breakoutPct = -gapPct;
-            proximity = Math.min(breakoutPct / 2.0, 1.0) * 50;
+            if (breakoutPct > ENTRY_SLIPPAGE_CAP_PCT) {
+                proximity = 0;
+            } else {
+                proximity = 50;
+            }
         } else {
             // 미달: 목표가까지 남은 거리로 점수 부여 (5% 이내 = 0~50점)
             proximity = Math.max(0, (5.0 - gapPct) / 5.0) * 50;
         }
-        double score = volScore + proximity;
+        double score = (proximity == 0 && gapPct < 0) ? 0 : volScore + proximity;
 
         String detail = String.format("목표가=%.0f, Range=%.0f, 거래량비율=%.1fx", targetPrice, range, volRatio);
         return new SignalGapDto(0, ticker, stockName, "volatility-breakout",

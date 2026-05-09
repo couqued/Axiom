@@ -128,6 +128,8 @@ public class TrailingStopService {
             if (sold) {
                 peakPrices.remove(ticker);
                 stateStore.removePeakPrice(ticker);
+                stateStore.removeBuyStage(ticker);
+                stateStore.removeEntryTag(ticker);
             } else {
                 log.warn("[TrailingStop] 매도 최종 실패 — {} peakPrices 유지, 다음 주기(1분 후)에 재시도", ticker);
             }

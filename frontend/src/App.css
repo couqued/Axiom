@@ -1211,6 +1211,47 @@ body {
   padding: 20px 0;
 }
 
+.strategy-filter-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+.strategy-filter-chips .chip {
+  background: #14142a;
+  border: 1px solid #2a2a4a;
+  color: #aaa;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.strategy-filter-chips .chip:hover {
+  color: #e0e0e0;
+  border-color: #3a3a5a;
+}
+.strategy-filter-chips .chip.active {
+  background: #1f1f3a;
+  color: #fff;
+  border-color: #4fa3ff;
+  font-weight: 600;
+}
+
+.signal-scroll-wrapper,
+.ranking-scroll-wrapper {
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: auto;
+  margin-top: 8px;
+}
+.signal-scroll-wrapper .signal-table-header {
+  position: sticky;
+  top: 0;
+  background: #121212;
+  z-index: 1;
+}
+
 /* ── 시간별 실행 이력 ─────────────────────────────────────────────────── */
 
 .run-history-card {
@@ -1275,3 +1316,171 @@ body {
 .rh-tag-buy   { background: #0a1f12; color: #7dffaa; border: 1px solid #1d6e3a; }
 .rh-tag-skip  { background: #1f1a09; color: #ffd966; border: 1px solid #7a6419; }
 .rh-tag-empty { background: #1a1a2e; color: #555577; border: 1px solid #2a2a4a; }
+
+/* ── 워치리스트 관리 ──────────────────────────────────────────────────── */
+.watchlist-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.watchlist-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.watchlist-action-btn {
+  background: #1e2540;
+  color: #b8d4ff;
+  border: 1px solid #3d4d76;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  transition: all 0.15s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.watchlist-action-btn:hover:not(:disabled) {
+  background: #2a3258;
+  color: #e6efff;
+  border-color: #4d5d8f;
+}
+.watchlist-action-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.watchlist-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.watchlist-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.watchlist-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+  align-items: center;
+}
+
+.watchlist-filter-btn {
+  background: #1a1a2e;
+  color: #888;
+  border: 1px solid #2d2d3a;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.watchlist-filter-btn:hover { color: #ccc; border-color: #4d4d5d; }
+.watchlist-filter-btn.active {
+  background: #1e2038;
+  color: #8888cc;
+  border-color: #3a3a6a;
+}
+
+.watchlist-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.watchlist-badge.active   { background: #0a1f12; color: #7dffaa; border: 1px solid #1d6e3a; }
+.watchlist-badge.auto     { background: #1f1a09; color: #ffd966; border: 1px solid #7a6419; }
+.watchlist-badge.manual   { background: #1a1a2e; color: #888;    border: 1px solid #444; }
+.watchlist-badge.removed  { background: #2d1414; color: #ff8080; border: 1px solid #6e1d1d; }
+.watchlist-badge.pending  { background: #2d1e0a; color: #ffaa44; border: 1px solid #7a4d0e; }
+
+.watchlist-table-wrap {
+  margin-top: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid #2d2d3a;
+  border-radius: 8px;
+}
+
+.watchlist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+.watchlist-table .col-stock  { width: 105px; }
+.watchlist-table .col-index  { width: 70px; }
+.watchlist-table .col-status { width: 80px; }
+.watchlist-table .col-reason { width: auto; }
+.watchlist-table .col-action { width: 56px; }
+
+.watchlist-table thead th {
+  position: sticky;
+  top: 0;
+  background: #1a1d27;
+  color: #888;
+  font-weight: 600;
+  font-size: 11px;
+  text-align: left;
+  padding: 8px 8px;
+  border-bottom: 1px solid #2d2d3a;
+}
+.watchlist-table tbody td {
+  padding: 8px 8px;
+  border-bottom: 1px solid #22222d;
+  vertical-align: middle;
+}
+.watchlist-table tbody tr:hover { background: #1a1d27; }
+
+.watchlist-name {
+  font-weight: 600;
+  color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.watchlist-ticker { font-size: 11px; color: #666; margin-top: 2px; }
+.watchlist-reason {
+  font-size: 12px;
+  color: #aaa;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.watchlist-action-cell {
+  text-align: right;
+  padding: 6px 8px;
+}
+
+.watchlist-row-btn {
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 48px;
+}
+.watchlist-row-btn.exclude {
+  background: #2d1414;
+  color: #ff8080;
+  border: 1px solid #6e1d1d;
+}
+.watchlist-row-btn.restore {
+  background: #0a1f12;
+  color: #7dffaa;
+  border: 1px solid #1d6e3a;
+}
+.watchlist-row-btn:disabled { opacity: 0.5; cursor: not-allowed; }

@@ -6,6 +6,7 @@ import com.axiom.strategy.dto.PortfolioItemDto;
 import com.axiom.strategy.dto.StockPriceDto;
 import com.axiom.strategy.service.ProfitTakeService;
 import com.axiom.strategy.service.TrailingStopService;
+import com.axiom.strategy.service.VolBreakoutExitService;
 import com.axiom.strategy.persistence.StrategyStateStore;
 import com.axiom.strategy.util.TradingCalendar;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,7 @@ public class TrailingStopScheduler {
     private final MarketClient marketClient;
     private final TrailingStopService trailingStopService;
     private final ProfitTakeService profitTakeService;
+    private final VolBreakoutExitService volBreakoutExitService;
     private final StrategyStateStore strategyStateStore;
 
     /**
@@ -68,6 +70,7 @@ public class TrailingStopScheduler {
 
                 trailingStopService.check(position.getTicker(), price.getCurrentPrice(), positions);
                 profitTakeService.check(position.getTicker(), price.getCurrentPrice(), positions);
+                volBreakoutExitService.check(position.getTicker(), price.getCurrentPrice(), positions);
                 Thread.sleep(200); // KIS API Rate Limit
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
